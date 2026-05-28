@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api, ApiClientError } from "../api/client";
 import type { DirectLink } from "../api/types";
 import { formatDate } from "../lib/formatDate";
+import { CopyIcon, LinkIcon, RefreshIcon, TrashIcon } from "../components/Icons";
 
 export function Links() {
   const [links, setLinks] = useState<DirectLink[]>([]);
@@ -43,56 +44,137 @@ export function Links() {
     }
   };
 
+  const totalClicks = useMemo(
+    () => links.reduce((acc, l) => acc + l.click_count, 0),
+    [links],
+  );
+  const activeCount = useMemo(
+    () => links.filter((l) => !l.revoked).length,
+    [links],
+  );
+
   return (
     <>
-      <h2 className="section-title">直链</h2>
-      <div className="toolbar">
-        <button className="button is-secondary" onClick={refresh}>刷新</button>
+      <header className="page-header">
+        <div>
+          <h1 className="page-header__title">直链</h1>
+          <p className="page-header__subtitle">管理已生成的对外分享链接</p>
+        </div>
+        <div className="page-header__actions">
+          <button className="button is-secondary" onClick={refresh}>
+            <RefreshIcon size={16} />
+            刷新
+          </button>
+        </div>
+      </header>
+
+      <div className="stat-grid">
+        <div className="stat-card">
+          <span className="stat-card__icon">
+            <LinkIcon size={20} />
+          </span>
+          <div>
+            <p className="stat-card__label">直链总数</p>
+            <p className="stat-card__value">{links.length}</p>
+          </div>
+        </div>
+        <div className="stat-card">
+          <span className="stat-card__icon is-green">
+            <LinkIcon size={20} />
+          </span>
+          <div>
+            <p className="stat-card__label">生效中</p>
+            <p className="stat-card__value">{activeCount}</p>
+          </div>
+        </div>
+        <div className="stat-card">
+          <span className="stat-card__icon is-amber">
+            <CopyIcon size={20} />
+          </span>
+          <div>
+            <p className="stat-card__label">累计访问</p>
+            <p className="stat-card__value">{totalClicks}</p>
+          </div>
+        </div>
       </div>
-      {error && <div className="banner-error" style={{ marginBottom: 12 }}>{error}</div>}
-      <div className="surface" style={{ padding: 0 }}>
+
+      {error && <div className="banner-error">{error}</div>}
+
+      <div className="surface surface--flush">
+        <div className="surface__header">
+          <h2 className="surface__title">
+            全部直链
+            <span className="surface__count">{links.length}</span>
+          </h2>
+        </div>
         <table className="table">
           <thead>
             <tr>
               <th>Bucket / Key</th>
               <th>URL</th>
-              <th style={{ width: 140 }}>创建时间</th>
-              <th style={{ width: 140 }}>过期时间</th>
-              <th style={{ width: 70 }}>点击</th>
-              <th style={{ width: 140 }}></th>
+              <th style={{ width: 160 }}>创建时间</th>
+              <th style={{ width: 160 }}>过期时间</th>
+              <th style={{ width: 80 }}>点击</th>
+              <th style={{ width: 120 }}></th>
             </tr>
           </thead>
           <tbody>
             {links.map((link) => (
               <tr key={link.token}>
                 <td>
-                  <div>{link.bucket} / {link.key}</div>
-                  {link.revoked && <div className="muted">（已撤销）</div>}
+                  <div className="col-stack">
+                    <span className="col-stack__primary truncate" style={{ maxWidth: 280 }}>
+                      {link.bucket} / {link.key}
+                    </span>
+                    {link.revoked && (
+                      <span className="chip is-danger" style={{ marginTop: 4, width: "fit-content" }}>
+                        已撤销
+                      </span>
+                    )}
+                  </div>
                 </td>
-                <td style={{ fontFamily: "ui-monospace,monospace", fontSize: 12 }}>{link.url}</td>
+                <td>
+                  <span className="mono truncate" style={{ display: "inline-block", maxWidth: 360 }}>
+                    {link.url}
+                  </span>
+                </td>
                 <td className="muted">{formatDate(link.created_at)}</td>
-                <td className="muted">{link.expires_at ? formatDate(link.expires_at) : "永久"}</td>
-                <td>{link.click_count}</td>
-                <td className="row-actions">
-                  <button className="button is-link" onClick={() => onCopy(link.url)}>复制</button>
-                  {!link.revoked && (
-                    <button className="button is-link" onClick={() => onRevoke(link.token)}>撤销</button>
+                <td className="muted">
+                  {link.expires_at ? formatDate(link.expires_at) : (
+                    <span className="chip">永久</span>
                   )}
+                </td>
+                <td>{link.click_count}</td>
+                <td>
+                  <div className="row-actions">
+                    <button
+                      className="button is-ghost is-icon"
+                      title="复制 URL"
+                      onClick={() => onCopy(link.url)}
+                    >
+                      <CopyIcon size={16} />
+                    </button>
+                    {!link.revoked && (
+                      <button
+                        className="button is-danger-ghost is-icon"
+                        title="撤销"
+                        onClick={() => onRevoke(link.token)}
+                      >
+                        <TrashIcon size={16} />
+                      </button>
+                    )}
+                  </div>
                 </td>
               </tr>
             ))}
             {!loading && links.length === 0 && (
               <tr>
-                <td colSpan={6} style={{ textAlign: "center", padding: 24 }} className="muted">
-                  暂无直链
-                </td>
+                <td colSpan={6} className="table__empty">暂无直链</td>
               </tr>
             )}
             {loading && (
               <tr>
-                <td colSpan={6} style={{ textAlign: "center", padding: 24 }} className="muted">
-                  加载中…
-                </td>
+                <td colSpan={6} className="table__empty">加载中…</td>
               </tr>
             )}
           </tbody>

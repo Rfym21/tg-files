@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { DirectLink } from "../api/types";
+import { CloseIcon, CopyIcon } from "./Icons";
 
 interface LinkDialogProps {
   link: DirectLink | null;
@@ -33,26 +34,29 @@ export function LinkDialog({ link, onClose }: LinkDialogProps) {
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal-card" onClick={(e) => e.stopPropagation()}>
-        <div className="modal-title">直链已生成</div>
-        <div className="muted" style={{ fontSize: 12 }}>
-          {link.bucket} / {link.key}
+        <div className="modal-card__header">
+          <div>
+            <h3 className="modal-title">直链已生成</h3>
+            <div className="muted" style={{ fontSize: "var(--font-size-sm)", marginTop: 4 }}>
+              {link.bucket} / {link.key}
+            </div>
+          </div>
+          <button className="modal-card__close" onClick={onClose} aria-label="关闭">
+            <CloseIcon />
+          </button>
         </div>
         <div className="link-url-row">
           <input ref={inputRef} readOnly value={link.url} />
-          <button className="button" onClick={copy}>
+          <button className="button is-primary" onClick={copy}>
+            <CopyIcon size={14} />
             {copied ? "已复制" : "复制"}
           </button>
         </div>
         {link.expires_at && (
-          <div className="muted" style={{ marginTop: 8, fontSize: 12 }}>
+          <div className="muted" style={{ marginTop: 12, fontSize: "var(--font-size-sm)" }}>
             过期时间：{new Date(link.expires_at).toLocaleString()}
           </div>
         )}
-        <div style={{ marginTop: 16, textAlign: "right" }}>
-          <button className="button is-secondary" onClick={onClose}>
-            关闭
-          </button>
-        </div>
       </div>
     </div>
   );

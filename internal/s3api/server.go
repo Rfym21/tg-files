@@ -84,14 +84,6 @@ func NewServer(objectStore ObjectStore, options Options) http.Handler {
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch r.URL.Path {
-	case "/healthz":
-		if r.Method != http.MethodGet {
-			http.NotFound(w, r)
-			return
-		}
-		w.WriteHeader(http.StatusOK)
-		_, _ = io.WriteString(w, "ok")
-		return
 	case "/readyz":
 		if r.Method != http.MethodGet {
 			http.NotFound(w, r)

@@ -90,7 +90,7 @@ func (s *Server) OwnsPath(path string) bool {
 	if s.isAPIPath(path) || isDirectLinkPath(path) {
 		return true
 	}
-	if path == "/favicon.ico" || path == "/manifest.webmanifest" {
+	if path == "/favicon.ico" || path == "/favicon.svg" || path == "/manifest.webmanifest" {
 		return true
 	}
 	if strings.HasPrefix(path, "/assets/") {

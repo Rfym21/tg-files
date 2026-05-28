@@ -56,19 +56,19 @@ webdav:
   # prefix: "/dav/"
 
 # Web UI（默认关闭，启用后浏览器可登录并上传文件 + 生成直链）
-# web:
-#   enabled: false
-#   admin_user_env: "TGNAS_ADMIN_USER"
-#   admin_password_env: "TGNAS_ADMIN_PASSWORD"
-#   session_secret_env: "TGNAS_SESSION_SECRET"   # 至少 32 字节
-#   session_ttl: "24h"
-#   direct_link_default_ttl: "168h"               # 7d，0 = 永不过期
-#   upload_auto_link: true                        # 上传后自动建短链放在响应里
-#   allowed_buckets: []                           # 空 = 全部已配置 bucket
+web:
+  enabled: true
+  admin_user_env: "TGNAS_ADMIN_USER"
+  admin_password_env: "TGNAS_ADMIN_PASSWORD"
+  session_secret_env: "TGNAS_SESSION_SECRET"   # 至少 32 字节
+  session_ttl: "24h"
+  direct_link_default_ttl: "168h"               # 7d，0 = 永不过期
+  upload_auto_link: true                        # 上传后自动建短链放在响应里
+  allowed_buckets: []                           # 空 = 全部已配置 bucket
 
 buckets:
   tgnas:
-    chat_id: "${TGNAS_TELEGRAM_CHAT_ID}"
+    chat_id: "-1003971599667"
     # public_read: false
   # private:
   #   chat_id: "-1001234567890"

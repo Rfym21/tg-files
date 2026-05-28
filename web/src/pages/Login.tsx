@@ -1,6 +1,7 @@
 import { FormEvent, useEffect, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { api, ApiClientError } from "../api/client";
+import { CloudIcon } from "../components/Icons";
 
 export function Login() {
   const navigate = useNavigate();
@@ -45,8 +46,15 @@ export function Login() {
   return (
     <div className="login-shell">
       <form className="login-card" onSubmit={submit}>
-        <h1 className="login-title">TgNAS</h1>
-        <p className="login-subtitle">使用管理员账号登录</p>
+        <div className="login-brand">
+          <span className="login-brand__mark">
+            <CloudIcon size={24} />
+          </span>
+          <div style={{ textAlign: "center" }}>
+            <h1 className="login-title">TgNAS</h1>
+            <p className="login-subtitle">使用管理员账号登录</p>
+          </div>
+        </div>
         <div className="login-form">
           <div className="form-field">
             <label htmlFor="username">用户名</label>
@@ -69,8 +77,8 @@ export function Login() {
               required
             />
           </div>
-          {error && <div className="banner-error">{error}</div>}
-          <button className="button" disabled={submitting} style={{ marginTop: 4 }}>
+          {error && <div className="banner-error" style={{ margin: 0 }}>{error}</div>}
+          <button className="button is-primary is-block" disabled={submitting}>
             {submitting ? "登录中…" : "登录"}
           </button>
         </div>

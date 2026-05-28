@@ -419,7 +419,7 @@ func TestOwnsPath(t *testing.T) {
 		"/favicon.ico":      true,
 		"/some-bucket":      false,
 		"/dav/foo":          false,
-		"/healthz":          false,
+		"/readyz":           false,
 	}
 	for path, want := range cases {
 		if got := srv.OwnsPath(path); got != want {

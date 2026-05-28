@@ -1,26 +1,55 @@
 @theme {
-  --color-background: #fcfcfc;
+  --color-background: #f4f5f7;
   --color-surface: #ffffff;
-  --color-surface-elevated: #f5f5f7;
-  --color-border: rgba(0, 0, 0, 0.10);
-  --color-border-strong: rgba(0, 0, 0, 0.16);
-  --color-foreground: #1d1d1f;
-  --color-foreground-muted: #6e6e73;
-  --color-accent: #007aff;
-  --color-accent-hover: #0066d6;
-  --color-danger: #ff3b30;
-  --color-success: #34c759;
+  --color-surface-elevated: #f7f8fa;
+  --color-surface-sunken: #eceef2;
+  --color-border: rgba(15, 23, 42, 0.06);
+  --color-border-strong: rgba(15, 23, 42, 0.12);
+  --color-foreground: #0b0f1a;
+  --color-foreground-muted: #6b7280;
+  --color-foreground-faint: #94a3b8;
+  --color-accent: #1e1e2e;
+  --color-accent-hover: #2a2a3d;
+  --color-accent-soft: rgba(30, 30, 46, 0.06);
+  --color-brand: #4f46e5;
+  --color-brand-soft: rgba(79, 70, 229, 0.10);
+  --color-danger: #ef4444;
+  --color-danger-soft: rgba(239, 68, 68, 0.10);
+  --color-success: #10b981;
+  --color-success-soft: rgba(16, 185, 129, 0.10);
+  --color-warning: #f59e0b;
+  --color-warning-soft: rgba(245, 158, 11, 0.12);
 
-  --radius-sm: 4px;
-  --radius-md: 6px;
-  --radius-lg: 8px;
-  --radius-xl: 10px;
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 20px;
+  --radius-2xl: 24px;
 
-  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text",
-    "Helvetica Neue", system-ui, sans-serif;
-  --font-size-xs: 11px;
-  --font-size-sm: 12px;
-  --font-size-base: 13px;
-  --font-size-lg: 15px;
-  --line-height-base: 1.4;
+  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.04);
+  --shadow-md: 0 4px 16px rgba(15, 23, 42, 0.05);
+  --shadow-lg: 0 16px 40px rgba(15, 23, 42, 0.10);
+  --shadow-card: 0 1px 0 rgba(15, 23, 42, 0.03), 0 1px 2px rgba(15, 23, 42, 0.04);
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-7: 32px;
+  --space-8: 40px;
+  --space-9: 56px;
+
+  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "SF Pro Text",
+    "Helvetica Neue", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "JetBrains Mono", "Fira Code", monospace;
+  --font-size-xs: 12px;
+  --font-size-sm: 13px;
+  --font-size-base: 14px;
+  --font-size-md: 15px;
+  --font-size-lg: 17px;
+  --font-size-xl: 20px;
+  --font-size-2xl: 24px;
+  --line-height-base: 1.55;
 }

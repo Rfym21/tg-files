@@ -261,11 +261,11 @@ func TestRunServiceWithDebugRoutesByMode(t *testing.T) {
 				t.Fatalf("s3 status = %d, want %d", s3Rec.Code, tc.s3Status)
 			}
 
-			healthReq := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+			healthReq := httptest.NewRequest(http.MethodGet, "/readyz", nil)
 			healthRec := httptest.NewRecorder()
 			handler.ServeHTTP(healthRec, healthReq)
 			if healthRec.Code != tc.healthCode {
-				t.Fatalf("health status = %d, want %d", healthRec.Code, tc.healthCode)
+				t.Fatalf("ready status = %d, want %d", healthRec.Code, tc.healthCode)
 			}
 		})
 	}

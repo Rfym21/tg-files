@@ -736,7 +736,7 @@ func newCombinedHandlerWithWeb(s3Handler, davHandler http.Handler, webServer *we
 }
 
 func (h *combinedHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path == "/healthz" || r.URL.Path == "/readyz" {
+	if r.URL.Path == "/readyz" {
 		h.s3.ServeHTTP(w, r)
 		return
 	}
