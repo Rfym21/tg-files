@@ -117,7 +117,7 @@ jobs:
             ${{ env.GITHUB_CR_REPO }}
           tags: |
             type=raw,value=${{ inputs.tag }},enable=${{ inputs.tag != '' }}
-            type=ref,event=branch
+            type=raw,value=latest,enable={{is_default_branch}}
             type=ref,event=pr
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
