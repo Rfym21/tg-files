@@ -35,6 +35,18 @@ type Config struct {
 	Storage  StorageConfig           `yaml:"storage"`
 	Buckets  map[string]BucketConfig `yaml:"buckets"`
 	WebDAV   WebDAVConfig            `yaml:"webdav"`
+	Web      WebConfig               `yaml:"web"`
+}
+
+type WebConfig struct {
+	Enabled              bool     `yaml:"enabled"`
+	AdminUserEnv         string   `yaml:"admin_user_env"`
+	AdminPasswordEnv     string   `yaml:"admin_password_env"`
+	SessionSecretEnv     string   `yaml:"session_secret_env"`
+	SessionTTL           Duration `yaml:"session_ttl"`
+	AllowedBuckets       []string `yaml:"allowed_buckets"`
+	DirectLinkDefaultTTL Duration `yaml:"direct_link_default_ttl"`
+	UploadAutoLink       *bool    `yaml:"upload_auto_link"`
 }
 
 type ServerConfig struct {
@@ -293,7 +305,74 @@ func (c Config) Validate() error {
 		return err
 	}
 
+	if err := c.validateWeb(); err != nil {
+		return err
+	}
+
 	return nil
+}
+
+var reservedWebBucketNames = map[string]struct{}{
+	"api":                  {},
+	"d":                    {},
+	"assets":               {},
+	"login":                {},
+	"files":                {},
+	"links":                {},
+	"favicon.ico":          {},
+	"manifest.webmanifest": {},
+}
+
+func (c Config) validateWeb() error {
+	if !c.Web.Enabled {
+		return nil
+	}
+	if strings.TrimSpace(c.Web.AdminUserEnv) == "" {
+		return fmt.Errorf("web admin_user_env is required")
+	}
+	if strings.TrimSpace(c.Web.AdminPasswordEnv) == "" {
+		return fmt.Errorf("web admin_password_env is required")
+	}
+	if strings.TrimSpace(c.Web.SessionSecretEnv) == "" {
+		return fmt.Errorf("web session_secret_env is required")
+	}
+	if strings.TrimSpace(os.Getenv(c.Web.AdminUserEnv)) == "" {
+		return fmt.Errorf("web admin_user_env %q resolves to empty value", c.Web.AdminUserEnv)
+	}
+	if strings.TrimSpace(os.Getenv(c.Web.AdminPasswordEnv)) == "" {
+		return fmt.Errorf("web admin_password_env %q resolves to empty value", c.Web.AdminPasswordEnv)
+	}
+	secret := os.Getenv(c.Web.SessionSecretEnv)
+	if len(secret) < 32 {
+		return fmt.Errorf("web session_secret_env %q must resolve to at least 32 bytes", c.Web.SessionSecretEnv)
+	}
+	for name := range c.Buckets {
+		if _, reserved := reservedWebBucketNames[name]; reserved {
+			return fmt.Errorf("bucket %q name is reserved when web is enabled", name)
+		}
+	}
+	return nil
+}
+
+func (c Config) ResolveSessionTTL() time.Duration {
+	if c.Web.SessionTTL > 0 {
+		return time.Duration(c.Web.SessionTTL)
+	}
+	return 24 * time.Hour
+}
+
+func (c Config) ResolveDirectLinkTTL() time.Duration {
+	if c.Web.DirectLinkDefaultTTL > 0 {
+		return time.Duration(c.Web.DirectLinkDefaultTTL)
+	}
+	return 7 * 24 * time.Hour
+}
+
+func (c Config) ResolveUploadAutoLink() bool {
+	if c.Web.UploadAutoLink == nil {
+		return true
+	}
+	return *c.Web.UploadAutoLink
 }
 
 func applyStorageDefaults(storage *StorageConfig) {

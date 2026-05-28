@@ -1019,6 +1019,85 @@ func TestSQLiteRenameBucketPreservesChatID(t *testing.T) {
 	}
 }
 
+func TestSQLiteDirectLinkCRUD(t *testing.T) {
+	store := openTestSQLiteStore(t)
+	defer store.Close()
+	ctx := t.Context()
+
+	created := time.Unix(1_700_000_000, 0).UTC()
+	link := DirectLink{
+		Token:     "abc123",
+		Bucket:    "demo",
+		Key:       "hello.txt",
+		Filename:  "hello.txt",
+		CreatedAt: created,
+		ExpiresAt: created.Add(time.Hour),
+		CreatedBy: "admin",
+	}
+	if err := store.CreateDirectLink(ctx, link); err != nil {
+		t.Fatalf("CreateDirectLink: %v", err)
+	}
+
+	got, err := store.GetDirectLinkByToken(ctx, "abc123")
+	if err != nil {
+		t.Fatalf("GetDirectLinkByToken: %v", err)
+	}
+	if got.Bucket != "demo" || got.Key != "hello.txt" || got.CreatedBy != "admin" {
+		t.Errorf("link mismatch: %+v", got)
+	}
+	if got.ExpiresAt.IsZero() {
+		t.Error("expected expires_at, got zero")
+	}
+
+	if err := store.IncrementDirectLinkClick(ctx, "abc123"); err != nil {
+		t.Fatalf("IncrementDirectLinkClick: %v", err)
+	}
+	got, _ = store.GetDirectLinkByToken(ctx, "abc123")
+	if got.ClickCount != 1 {
+		t.Errorf("click_count = %d, want 1", got.ClickCount)
+	}
+
+	links, err := store.ListDirectLinks(ctx, ListLinksQuery{Bucket: "demo", Limit: 10})
+	if err != nil {
+		t.Fatalf("ListDirectLinks: %v", err)
+	}
+	if len(links) != 1 {
+		t.Errorf("got %d links, want 1", len(links))
+	}
+
+	if err := store.RevokeDirectLink(ctx, "abc123"); err != nil {
+		t.Fatalf("RevokeDirectLink: %v", err)
+	}
+	got, _ = store.GetDirectLinkByToken(ctx, "abc123")
+	if !got.Revoked {
+		t.Error("expected revoked = true")
+	}
+
+	if err := store.RevokeDirectLink(ctx, "missing"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("revoke missing returned %v, want ErrNotFound", err)
+	}
+	if _, err := store.GetDirectLinkByToken(ctx, "missing"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("get missing returned %v, want ErrNotFound", err)
+	}
+}
+
+func TestSQLiteDirectLinkNoExpiry(t *testing.T) {
+	store := openTestSQLiteStore(t)
+	defer store.Close()
+	ctx := t.Context()
+	link := DirectLink{Token: "no-exp", Bucket: "demo", Key: "k", CreatedAt: time.Unix(1, 0)}
+	if err := store.CreateDirectLink(ctx, link); err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.GetDirectLinkByToken(ctx, "no-exp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.ExpiresAt.IsZero() {
+		t.Errorf("expected zero ExpiresAt, got %v", got.ExpiresAt)
+	}
+}
+
 func openTestSQLiteStore(t *testing.T) *SQLiteStore {
 	t.Helper()
 

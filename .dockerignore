@@ -7,3 +7,6 @@ vendor
 **/*.sqlite
 **/*.db
 docs/superpowers/
+web/node_modules
+internal/web/dist/assets
+internal/web/dist/index.html

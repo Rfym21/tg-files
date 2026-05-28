@@ -575,8 +575,145 @@ func (s *SQLiteStore) migrate() error {
 		sha256 TEXT NOT NULL,
 		PRIMARY KEY(bucket, key, part_number)
 	);
+
+	CREATE TABLE IF NOT EXISTS direct_links (
+		token TEXT PRIMARY KEY,
+		bucket TEXT NOT NULL,
+		key TEXT NOT NULL,
+		filename TEXT NOT NULL DEFAULT '',
+		created_at INTEGER NOT NULL,
+		expires_at INTEGER NOT NULL DEFAULT 0,
+		created_by TEXT NOT NULL DEFAULT '',
+		revoked INTEGER NOT NULL DEFAULT 0,
+		click_count INTEGER NOT NULL DEFAULT 0
+	);
+
+	CREATE INDEX IF NOT EXISTS direct_links_bucket_key ON direct_links(bucket, key);
+	CREATE INDEX IF NOT EXISTS direct_links_expires_at ON direct_links(expires_at);
 	`)
 	return err
+}
+
+func (s *SQLiteStore) CreateDirectLink(ctx context.Context, link DirectLink) error {
+	expiresAt := int64(0)
+	if !link.ExpiresAt.IsZero() {
+		expiresAt = link.ExpiresAt.Unix()
+	}
+	_, err := s.db.ExecContext(ctx, `
+	INSERT INTO direct_links (token, bucket, key, filename, created_at, expires_at, created_by, revoked, click_count)
+	VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0)
+	`, link.Token, link.Bucket, link.Key, link.Filename, link.CreatedAt.Unix(), expiresAt, link.CreatedBy)
+	return err
+}
+
+func (s *SQLiteStore) GetDirectLinkByToken(ctx context.Context, token string) (DirectLink, error) {
+	row := s.db.QueryRowContext(ctx, `
+	SELECT token, bucket, key, filename, created_at, expires_at, created_by, revoked, click_count
+	FROM direct_links
+	WHERE token = ?
+	`, token)
+	return scanDirectLink(row)
+}
+
+func (s *SQLiteStore) ListDirectLinks(ctx context.Context, query ListLinksQuery) ([]DirectLink, error) {
+	limit := query.Limit
+	if limit <= 0 {
+		limit = 100
+	}
+	var (
+		rows *sql.Rows
+		err  error
+	)
+	switch {
+	case query.Bucket != "" && query.AfterTok != "":
+		rows, err = s.db.QueryContext(ctx, `
+		SELECT token, bucket, key, filename, created_at, expires_at, created_by, revoked, click_count
+		FROM direct_links
+		WHERE bucket = ? AND token > ?
+		ORDER BY token ASC
+		LIMIT ?
+		`, query.Bucket, query.AfterTok, limit)
+	case query.Bucket != "":
+		rows, err = s.db.QueryContext(ctx, `
+		SELECT token, bucket, key, filename, created_at, expires_at, created_by, revoked, click_count
+		FROM direct_links
+		WHERE bucket = ?
+		ORDER BY token ASC
+		LIMIT ?
+		`, query.Bucket, limit)
+	case query.AfterTok != "":
+		rows, err = s.db.QueryContext(ctx, `
+		SELECT token, bucket, key, filename, created_at, expires_at, created_by, revoked, click_count
+		FROM direct_links
+		WHERE token > ?
+		ORDER BY token ASC
+		LIMIT ?
+		`, query.AfterTok, limit)
+	default:
+		rows, err = s.db.QueryContext(ctx, `
+		SELECT token, bucket, key, filename, created_at, expires_at, created_by, revoked, click_count
+		FROM direct_links
+		ORDER BY token ASC
+		LIMIT ?
+		`, limit)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var links []DirectLink
+	for rows.Next() {
+		link, err := scanDirectLink(rows)
+		if err != nil {
+			return nil, err
+		}
+		links = append(links, link)
+	}
+	return links, rows.Err()
+}
+
+func (s *SQLiteStore) RevokeDirectLink(ctx context.Context, token string) error {
+	result, err := s.db.ExecContext(ctx, `UPDATE direct_links SET revoked = 1 WHERE token = ?`, token)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (s *SQLiteStore) IncrementDirectLinkClick(ctx context.Context, token string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE direct_links SET click_count = click_count + 1 WHERE token = ?`, token)
+	return err
+}
+
+func scanDirectLink(scanner objectScanner) (DirectLink, error) {
+	var (
+		link       DirectLink
+		createdAt  int64
+		expiresAt  int64
+		revoked    int
+		clickCount int64
+	)
+	if err := scanner.Scan(&link.Token, &link.Bucket, &link.Key, &link.Filename, &createdAt, &expiresAt, &link.CreatedBy, &revoked, &clickCount); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return DirectLink{}, ErrNotFound
+		}
+		return DirectLink{}, err
+	}
+	link.CreatedAt = unixSeconds(createdAt)
+	if expiresAt > 0 {
+		link.ExpiresAt = unixSeconds(expiresAt)
+	}
+	link.Revoked = revoked != 0
+	link.ClickCount = clickCount
+	return link, nil
 }
 
 type objectScanner interface {

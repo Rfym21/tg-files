@@ -1157,9 +1157,27 @@ func (s listBucketsFailStore) RenameBucket(ctx context.Context, oldName, newName
 	return metadata.BucketRename{}, errors.New("not implemented")
 }
 
-func (s listBucketsFailStore) Close() error {
-	return nil
+func (s listBucketsFailStore) CreateDirectLink(ctx context.Context, link metadata.DirectLink) error {
+	return errors.New("not implemented")
 }
+
+func (s listBucketsFailStore) GetDirectLinkByToken(ctx context.Context, token string) (metadata.DirectLink, error) {
+	return metadata.DirectLink{}, errors.New("not implemented")
+}
+
+func (s listBucketsFailStore) ListDirectLinks(ctx context.Context, query metadata.ListLinksQuery) ([]metadata.DirectLink, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (s listBucketsFailStore) RevokeDirectLink(ctx context.Context, token string) error {
+	return errors.New("not implemented")
+}
+
+func (s listBucketsFailStore) IncrementDirectLinkClick(ctx context.Context, token string) error {
+	return errors.New("not implemented")
+}
+
+func (s listBucketsFailStore) Close() error { return nil }
 
 func (s deleteMissingReturnsNotFoundStore) DeleteObject(ctx context.Context, bucket, key string) error {
 	if _, err := s.Store.HeadObject(ctx, bucket, key); err != nil {

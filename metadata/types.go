@@ -70,6 +70,24 @@ type BucketRename struct {
 	Chunks  int
 }
 
+type DirectLink struct {
+	Token      string
+	Bucket     string
+	Key        string
+	Filename   string
+	CreatedAt  time.Time
+	ExpiresAt  time.Time
+	CreatedBy  string
+	Revoked    bool
+	ClickCount int64
+}
+
+type ListLinksQuery struct {
+	Bucket   string
+	AfterTok string
+	Limit    int
+}
+
 type Store interface {
 	Close() error
 	UpsertBucket(ctx context.Context, bucket Bucket) error
@@ -91,4 +109,9 @@ type Store interface {
 	DisableBucketsExcept(ctx context.Context, keepNames []string) error
 	CountBucketRenameRows(ctx context.Context, oldName string) (BucketRename, error)
 	RenameBucket(ctx context.Context, oldName, newName string) (BucketRename, error)
+	CreateDirectLink(ctx context.Context, link DirectLink) error
+	GetDirectLinkByToken(ctx context.Context, token string) (DirectLink, error)
+	ListDirectLinks(ctx context.Context, query ListLinksQuery) ([]DirectLink, error)
+	RevokeDirectLink(ctx context.Context, token string) error
+	IncrementDirectLinkClick(ctx context.Context, token string) error
 }

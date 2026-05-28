@@ -19,6 +19,7 @@ import (
 	"github.com/aahl/tgnas/config"
 	"github.com/aahl/tgnas/internal/dav"
 	"github.com/aahl/tgnas/internal/s3api"
+	"github.com/aahl/tgnas/internal/web"
 	"github.com/aahl/tgnas/metadata"
 	"github.com/aahl/tgnas/store"
 	"github.com/aahl/tgnas/telegram"
@@ -549,6 +550,32 @@ func publicReadBucketsFromConfig(cfg config.Config) map[string]bool {
 	return publicReadBuckets
 }
 
+func buildWebServer(cfg config.Config, objectStore *store.ObjectStore, meta metadata.Store, dbg debugLogger) (*web.Server, error) {
+	adminUser := os.Getenv(cfg.Web.AdminUserEnv)
+	adminPassword := os.Getenv(cfg.Web.AdminPasswordEnv)
+	sessionSecret := os.Getenv(cfg.Web.SessionSecretEnv)
+	if strings.TrimSpace(adminUser) == "" || strings.TrimSpace(adminPassword) == "" || len(sessionSecret) < 32 {
+		return nil, fmt.Errorf("web admin/secret environment variables are not set")
+	}
+	bucketChatIDs := map[string]string{}
+	for name, bucket := range cfg.Buckets {
+		bucketChatIDs[name] = bucket.ChatID
+	}
+	return web.NewServer(objectStore, meta, web.Options{
+		AdminUser:            adminUser,
+		AdminPassword:        adminPassword,
+		SessionSecret:        []byte(sessionSecret),
+		SessionTTL:           cfg.ResolveSessionTTL(),
+		DirectLinkDefaultTTL: cfg.ResolveDirectLinkTTL(),
+		UploadAutoLink:       cfg.ResolveUploadAutoLink(),
+		AllowedBuckets:       cfg.Web.AllowedBuckets,
+		PublicReadBuckets:    publicReadBucketsFromConfig(cfg),
+		BucketChatIDs:        bucketChatIDs,
+		PublicBaseURL:        cfg.Server.PublicBaseURL,
+		Logger:               dbg.StdLogger(),
+	}), nil
+}
+
 type trustedProxyMiddleware struct {
 	next   http.Handler
 	trust  trustedProxyTrust
@@ -691,6 +718,7 @@ func normalizeForwardedHost(host string) string {
 type combinedHandler struct {
 	s3      http.Handler
 	dav     http.Handler
+	web     *web.Server
 	prefix  string
 	davOnly bool
 }
@@ -703,9 +731,17 @@ func newDAVOnlyHandler(s3Handler, davHandler http.Handler, prefix string) http.H
 	return &combinedHandler{s3: s3Handler, dav: davHandler, prefix: prefix, davOnly: true}
 }
 
+func newCombinedHandlerWithWeb(s3Handler, davHandler http.Handler, webServer *web.Server, prefix string) http.Handler {
+	return &combinedHandler{s3: s3Handler, dav: davHandler, web: webServer, prefix: prefix}
+}
+
 func (h *combinedHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path == "/healthz" || r.URL.Path == "/readyz" {
 		h.s3.ServeHTTP(w, r)
+		return
+	}
+	if h.web != nil && h.web.OwnsPath(r.URL.Path) {
+		h.web.ServeHTTP(w, r)
 		return
 	}
 	if r.URL.Path == strings.TrimSuffix(h.prefix, "/") {
@@ -714,6 +750,10 @@ func (h *combinedHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if strings.HasPrefix(r.URL.Path, h.prefix) {
 		h.dav.ServeHTTP(w, r)
+		return
+	}
+	if h.web != nil && web.IsBrowserAnonymous(r) {
+		h.web.ServeHTTP(w, r)
 		return
 	}
 	if h.davOnly {
@@ -810,6 +850,14 @@ func runServiceWithDebug(configPath string, mode serverMode, dbg debugLogger) er
 		Ready:             ready.Load,
 		Logger:            dbg.StdLogger(),
 	})
+	var webServer *web.Server
+	if cfg.Web.Enabled && mode == serverModeAll {
+		webServer, err = buildWebServer(cfg, objectStore, meta, dbg)
+		if err != nil {
+			return fmt.Errorf("build web server: %w", err)
+		}
+	}
+
 	if mode == serverModeS3 {
 		handler = s3Handler
 	} else {
@@ -821,7 +869,11 @@ func runServiceWithDebug(configPath string, mode serverMode, dbg debugLogger) er
 		})
 		switch mode {
 		case serverModeAll:
-			handler = newCombinedHandler(s3Handler, davHandler, cfg.WebDAV.Prefix)
+			if webServer != nil {
+				handler = newCombinedHandlerWithWeb(s3Handler, davHandler, webServer, cfg.WebDAV.Prefix)
+			} else {
+				handler = newCombinedHandler(s3Handler, davHandler, cfg.WebDAV.Prefix)
+			}
 		case serverModeDAV:
 			handler = newDAVOnlyHandler(s3Handler, davHandler, cfg.WebDAV.Prefix)
 		default:
