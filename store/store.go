@@ -530,6 +530,9 @@ func (s *ObjectStore) GetObject(ctx context.Context, input GetObjectInput) (io.R
 		for _, chunk := range selected {
 			reader, err := s.downloadChunk(ctx, chunk.FileID)
 			if err != nil {
+				if s.logger != nil {
+					s.logger.Printf("error event=get_object_chunk_download bucket=%q key=%q file_id=%q error=%q", input.Bucket, input.Key, chunk.FileID, sanitizeLogError(err))
+				}
 				_ = pw.CloseWithError(err)
 				return
 			}
@@ -538,6 +541,9 @@ func (s *ObjectStore) GetObject(ctx context.Context, input GetObjectInput) (io.R
 			if chunk.Skip > 0 {
 				source = io.LimitReader(source, chunk.Skip)
 				if _, err := io.Copy(io.Discard, source); err != nil {
+					if s.logger != nil {
+						s.logger.Printf("error event=get_object_chunk_skip bucket=%q key=%q file_id=%q error=%q", input.Bucket, input.Key, chunk.FileID, sanitizeLogError(err))
+					}
 					_ = reader.Close()
 					_ = pw.CloseWithError(err)
 					return
@@ -548,11 +554,17 @@ func (s *ObjectStore) GetObject(ctx context.Context, input GetObjectInput) (io.R
 				source = io.LimitReader(source, chunk.Take)
 			}
 			if _, err := io.Copy(pw, source); err != nil {
+				if s.logger != nil {
+					s.logger.Printf("error event=get_object_chunk_copy bucket=%q key=%q file_id=%q error=%q", input.Bucket, input.Key, chunk.FileID, sanitizeLogError(err))
+				}
 				_ = reader.Close()
 				_ = pw.CloseWithError(err)
 				return
 			}
 			if err := reader.Close(); err != nil {
+				if s.logger != nil {
+					s.logger.Printf("error event=get_object_chunk_close bucket=%q key=%q file_id=%q error=%q", input.Bucket, input.Key, chunk.FileID, sanitizeLogError(err))
+				}
 				_ = pw.CloseWithError(err)
 				return
 			}
