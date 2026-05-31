@@ -71,7 +71,7 @@ export function Files() {
     if (bucket) refresh(bucket);
   }, [bucket, refresh]);
 
-  const onUploaded = (res: UploadResponse) => {
+  const onUploaded = (_res: UploadResponse) => {
     // 不再自动弹窗显示链接，用户可以通过文件列表中的"生成直链"按钮查看
   };
 
