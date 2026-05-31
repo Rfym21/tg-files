@@ -16,19 +16,16 @@ func TestDocumentStrategyAlwaysUsesDocumentWithinLimit(t *testing.T) {
 	if strategy.UploadStrategy != "document" {
 		t.Fatalf("UploadStrategy = %q, want document", strategy.UploadStrategy)
 	}
-	if strategy.Chunked {
-		t.Fatal("Chunked = true, want false")
-	}
 }
 
-func TestDefaultUploadConfigAllowsLargeMultipartUploads(t *testing.T) {
+func TestDefaultUploadConfigDefaults(t *testing.T) {
 	config := DefaultUploadConfig()
 
-	if config.MaxFileSize != 1024*1024*1024 {
-		t.Fatalf("MaxFileSize = %d, want 1073741824", config.MaxFileSize)
+	if config.MaxFileSize != 50*1024*1024 {
+		t.Fatalf("MaxFileSize = %d, want 52428800", config.MaxFileSize)
 	}
-	if config.ChunkSize != 20*1024*1024 {
-		t.Fatalf("ChunkSize = %d, want 20971520", config.ChunkSize)
+	if config.Strategy != "document" {
+		t.Fatalf("Strategy = %q, want document", config.Strategy)
 	}
 }
 
@@ -175,15 +172,14 @@ func TestAutoStrategyFallsBackToDocument(t *testing.T) {
 	if strategy.UploadStrategy != "document" {
 		t.Fatalf("UploadStrategy = %q, want document", strategy.UploadStrategy)
 	}
-	if strategy.Chunked {
-		t.Fatal("Chunked = true, want false")
-	}
 }
 
-func TestResolverChunksLargeDocument(t *testing.T) {
+func TestResolverLargeDocumentStaysDocumentWithinMaxFileSize(t *testing.T) {
 	resolver := NewUploadStrategyResolver(DefaultUploadConfig())
 	config := DefaultUploadConfig()
 
+	// Above the per-type document limit but below MaxFileSize: Resolve returns a
+	// plain document strategy; the per-type ceiling is enforced later in PutObject.
 	size := config.TypeLimits["document"] + 1
 	strategy, err := resolver.Resolve("archive.bin", "application/octet-stream", size)
 	if err != nil {
@@ -193,44 +189,8 @@ func TestResolverChunksLargeDocument(t *testing.T) {
 	if strategy.TelegramType != "document" {
 		t.Fatalf("TelegramType = %q, want document", strategy.TelegramType)
 	}
-	if strategy.UploadStrategy != "chunked_document" {
-		t.Fatalf("UploadStrategy = %q, want chunked_document", strategy.UploadStrategy)
-	}
-	if !strategy.Chunked {
-		t.Fatal("Chunked = false, want true")
-	}
-	if strategy.ChunkSize != config.ChunkSize {
-		t.Fatalf("ChunkSize = %d, want %d", strategy.ChunkSize, config.ChunkSize)
-	}
-}
-
-func TestResolverUsesDefaultChunkSizeWhenConfiguredChunkSizeIsNonPositive(t *testing.T) {
-	config := DefaultUploadConfig()
-	config.ChunkSize = 0
-	resolver := NewUploadStrategyResolver(config)
-
-	size := config.TypeLimits["document"] + 1
-	strategy, err := resolver.Resolve("archive.bin", "application/octet-stream", size)
-	if err != nil {
-		t.Fatalf("Resolve returned error: %v", err)
-	}
-
-	if !strategy.Chunked {
-		t.Fatal("Chunked = false, want true")
-	}
-	if strategy.ChunkSize != DefaultUploadConfig().ChunkSize {
-		t.Fatalf("ChunkSize = %d, want %d", strategy.ChunkSize, DefaultUploadConfig().ChunkSize)
-	}
-}
-
-func TestResolverRejectsLargeFileWhenChunkingDisabled(t *testing.T) {
-	config := DefaultUploadConfig()
-	config.EnableChunking = false
-	resolver := NewUploadStrategyResolver(config)
-
-	_, err := resolver.Resolve("archive.bin", "application/octet-stream", config.TypeLimits["document"]+1)
-	if err != ErrEntityTooLarge {
-		t.Fatalf("err = %v, want %v", err, ErrEntityTooLarge)
+	if strategy.UploadStrategy != "document" {
+		t.Fatalf("UploadStrategy = %q, want document", strategy.UploadStrategy)
 	}
 }
 

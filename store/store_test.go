@@ -135,15 +135,15 @@ func TestStorePutZeroByteObjectStoresMetadataWithoutTelegramUpload(t *testing.T)
 	}
 }
 
-func TestStoreChunkedPutAndFullGet(t *testing.T) {
+func TestStoreLargeDocumentPutAndFullGet(t *testing.T) {
 	ctx := context.Background()
-	objectStore, fake := newReadyTestObjectStoreWithUploadConfig(t, map[string]string{"backups": "-200"}, UploadConfig{Strategy: "document", EnableChunking: true, MaxFileSize: 50, ChunkSize: 3, TypeLimits: map[string]int64{"document": 3}, PutBufferSize: 2})
+	objectStore, fake := newReadyTestObjectStoreWithUploadConfig(t, map[string]string{"backups": "-200"}, UploadConfig{Strategy: "document", MaxFileSize: 50, TypeLimits: map[string]int64{"document": 50}, PutBufferSize: 2})
 	_, err := objectStore.PutObject(ctx, PutObjectInput{Bucket: "backups", Key: "big.bin", ContentType: "application/octet-stream", Size: 8, Body: strings.NewReader("abcdefgh")})
 	if err != nil {
 		t.Fatalf("PutObject returned error: %v", err)
 	}
-	if len(fake.Uploads) != 3 {
-		t.Fatalf("uploads = %d", len(fake.Uploads))
+	if len(fake.Uploads) != 1 {
+		t.Fatalf("uploads = %d, want 1 (single document, no chunking)", len(fake.Uploads))
 	}
 	reader, head, err := objectStore.GetObject(ctx, GetObjectInput{Bucket: "backups", Key: "big.bin"})
 	if err != nil {
@@ -153,6 +153,15 @@ func TestStoreChunkedPutAndFullGet(t *testing.T) {
 	data, _ := io.ReadAll(reader)
 	if string(data) != "abcdefgh" || head.Size != 8 {
 		t.Fatalf("data = %q head = %+v", string(data), head)
+	}
+}
+
+func TestStorePutObjectRejectsFileOverDocumentLimit(t *testing.T) {
+	ctx := context.Background()
+	objectStore, _ := newReadyTestObjectStoreWithUploadConfig(t, map[string]string{"backups": "-200"}, UploadConfig{Strategy: "document", MaxFileSize: 50, TypeLimits: map[string]int64{"document": 4}, PutBufferSize: 2})
+	_, err := objectStore.PutObject(ctx, PutObjectInput{Bucket: "backups", Key: "big.bin", ContentType: "application/octet-stream", Size: 8, Body: strings.NewReader("abcdefgh")})
+	if err != ErrEntityTooLarge {
+		t.Fatalf("err = %v, want ErrEntityTooLarge", err)
 	}
 }
 
@@ -180,13 +189,22 @@ func TestStoreMissingContentLength(t *testing.T) {
 	}
 }
 
-func TestStoreRangeGetChunkedDownloadsOnlyOverlappingChunks(t *testing.T) {
+func TestStoreRangeGetMultiChunkDownloadsOnlyOverlappingChunks(t *testing.T) {
 	ctx := context.Background()
-	objectStore, fake := newReadyTestObjectStoreWithUploadConfig(t, map[string]string{"backups": "-200"}, UploadConfig{Strategy: "document", EnableChunking: true, MaxFileSize: 50, ChunkSize: 3, TypeLimits: map[string]int64{"document": 3}})
-	_, err := objectStore.PutObject(ctx, PutObjectInput{Bucket: "backups", Key: "big.bin", ContentType: "application/octet-stream", Size: 9, Body: strings.NewReader("abcdefghi")})
+	objectStore, fake := newReadyTestObjectStoreWithUploadConfig(t, map[string]string{"backups": "-200"}, UploadConfig{Strategy: "document", MaxFileSize: 50, TypeLimits: map[string]int64{"document": 50}})
+	// Multipart with three single-message parts yields a three-chunk object;
+	// the range read must only fetch the overlapping chunk.
+	created, err := objectStore.CreateMultipartUpload(ctx, CreateMultipartUploadInput{Bucket: "backups", Key: "big.bin", ContentType: "application/octet-stream"})
 	if err != nil {
-		t.Fatalf("PutObject returned error: %v", err)
+		t.Fatalf("CreateMultipartUpload returned error: %v", err)
 	}
+	p1, _ := objectStore.UploadPart(ctx, UploadPartInput{Bucket: "backups", Key: "big.bin", UploadID: created.UploadID, PartNumber: 1, Size: 3, Body: strings.NewReader("abc")})
+	p2, _ := objectStore.UploadPart(ctx, UploadPartInput{Bucket: "backups", Key: "big.bin", UploadID: created.UploadID, PartNumber: 2, Size: 3, Body: strings.NewReader("def")})
+	p3, _ := objectStore.UploadPart(ctx, UploadPartInput{Bucket: "backups", Key: "big.bin", UploadID: created.UploadID, PartNumber: 3, Size: 3, Body: strings.NewReader("ghi")})
+	if _, err := objectStore.CompleteMultipartUpload(ctx, CompleteMultipartUploadInput{Bucket: "backups", Key: "big.bin", UploadID: created.UploadID, Parts: []CompletedPart{{PartNumber: 1, ETag: p1.ETag}, {PartNumber: 2, ETag: p2.ETag}, {PartNumber: 3, ETag: p3.ETag}}}); err != nil {
+		t.Fatalf("CompleteMultipartUpload returned error: %v", err)
+	}
+
 	byteRange := ByteRange{Start: 3, End: 5}
 	reader, _, err := objectStore.GetObject(ctx, GetObjectInput{Bucket: "backups", Key: "big.bin", Range: &byteRange})
 	if err != nil {
@@ -265,55 +283,6 @@ func TestStoreLogsOrphanUploadWhenMetadataCommitFails(t *testing.T) {
 	}
 }
 
-func TestStoreLogsOrphanUploadWhenChunkedUploadFailsAfterEarlierChunks(t *testing.T) {
-	ctx := context.Background()
-	meta, err := metadata.OpenSQLite(filepath.Join(t.TempDir(), "metadata.sqlite"))
-	if err != nil {
-		t.Fatalf("OpenSQLite returned error: %v", err)
-	}
-	defer meta.Close()
-	if err := meta.UpsertBucket(ctx, metadata.Bucket{Name: "backups", ChatID: "-200", CreatedAt: time.Now().UTC(), Enabled: true}); err != nil {
-		t.Fatalf("UpsertBucket returned error: %v", err)
-	}
-	fake := testutil.NewFakeTelegram()
-	uploadErr := errors.New("chunk upload failed: secret_key=123 bot_token=456 detail=retryable")
-	var uploadCalls atomic.Int32
-	fake.UploadFunc = func(ctx context.Context, request telegram.UploadRequest) (telegram.UploadedFile, error) {
-		_, err := io.ReadAll(request.Reader)
-		if err != nil {
-			return telegram.UploadedFile{}, err
-		}
-		call := uploadCalls.Add(1)
-		if call == 1 {
-			return telegram.UploadedFile{Type: request.Type, FileID: "chunk-file-1", FileUniqueID: "chunk-file-1-u", MessageID: 101, FileSize: 3, MIMEType: request.MIMEType}, nil
-		}
-		return telegram.UploadedFile{}, uploadErr
-	}
-	var logs bytes.Buffer
-	store := mustNewObjectStore(t, meta, fake, Options{Upload: UploadConfig{Strategy: "document", EnableChunking: true, MaxFileSize: 50, ChunkSize: 3, TypeLimits: map[string]int64{"document": 3}}, Logger: log.New(&logs, "", 0)})
-
-	_, err = store.PutObject(ctx, PutObjectInput{Bucket: "backups", Key: "big.bin", ContentType: "application/octet-stream", Size: 6, Body: strings.NewReader("abcdef")})
-	if !errors.Is(err, uploadErr) {
-		t.Fatalf("PutObject err = %v, want %v", err, uploadErr)
-	}
-	output := logs.String()
-	if !strings.Contains(output, `event=put_object_decision bucket="backups" key="big.bin" size=6`) || !strings.Contains(output, `chunked=true`) || !strings.Contains(output, `chunk_size=3`) || !strings.Contains(output, `chunk_count=2`) {
-		t.Fatalf("decision log output = %q", output)
-	}
-	if !strings.Contains(output, "orphan_upload") || !strings.Contains(output, `bucket="backups"`) || !strings.Contains(output, `key="big.bin"`) {
-		t.Fatalf("log output = %q", output)
-	}
-	if !strings.Contains(output, "file_id=chun...le-1 message_id=101") {
-		t.Fatalf("log missing redacted uploaded chunk details: %q", output)
-	}
-	if strings.Contains(output, "456") || strings.Contains(output, "123") {
-		t.Fatalf("log leaked secret material: %q", output)
-	}
-	if !strings.Contains(output, "secret_key=[REDACTED]") || !strings.Contains(output, "bot_token=[REDACTED]") {
-		t.Fatalf("log did not redact assignments: %q", output)
-	}
-}
-
 func TestStoreTypedUploadUsesTelegramReturnedFileSize(t *testing.T) {
 	ctx := context.Background()
 	meta, err := metadata.OpenSQLite(filepath.Join(t.TempDir(), "metadata.sqlite"))
@@ -340,7 +309,7 @@ func TestStoreTypedUploadUsesTelegramReturnedFileSize(t *testing.T) {
 		return telegram.UploadedFile{Type: request.Type, FileID: "photo-file-1", FileUniqueID: "photo-file-1-u", MessageID: 101, FileSize: 3, MIMEType: request.MIMEType}, nil
 	}
 
-	store := mustNewObjectStore(t, meta, fake, Options{Upload: UploadConfig{Strategy: "auto", EnableChunking: true, MaxFileSize: 50, ChunkSize: 3, TypeLimits: map[string]int64{"photo": 10, "document": 50}}})
+	store := mustNewObjectStore(t, meta, fake, Options{Upload: UploadConfig{Strategy: "auto", MaxFileSize: 50, TypeLimits: map[string]int64{"photo": 10, "document": 50}}})
 	if _, err := store.PutObject(ctx, PutObjectInput{Bucket: "photos", Key: "hello.jpg", ContentType: "image/jpeg", Size: 5, Body: strings.NewReader("hello")}); err != nil {
 		t.Fatalf("PutObject returned error: %v", err)
 	}
@@ -374,7 +343,7 @@ func TestStoreTypedUploadETagNotPlainMD5(t *testing.T) {
 		return telegram.UploadedFile{Type: request.Type, FileID: "photo-f1", FileUniqueID: "photo-f1-u", MessageID: 201, FileSize: 3}, nil
 	}
 
-	st := mustNewObjectStore(t, meta, fake, Options{Upload: UploadConfig{Strategy: "auto", EnableChunking: true, MaxFileSize: 50, ChunkSize: 3, TypeLimits: map[string]int64{"photo": 10, "document": 50}}})
+	st := mustNewObjectStore(t, meta, fake, Options{Upload: UploadConfig{Strategy: "auto", MaxFileSize: 50, TypeLimits: map[string]int64{"photo": 10, "document": 50}}})
 	result, err := st.PutObject(ctx, PutObjectInput{Bucket: "photos", Key: "typed.jpg", ContentType: "image/jpeg", Size: 5, Body: strings.NewReader("hello")})
 	if err != nil {
 		t.Fatalf("PutObject returned error: %v", err)
@@ -400,6 +369,18 @@ func md5sum(data []byte) []byte {
 	h := md5.New()
 	h.Write(data)
 	return h.Sum(nil)
+}
+
+// multipartETagOf mirrors the production multipart ETag: md5 over the
+// concatenated per-part md5 sums, suffixed with the part count.
+func multipartETagOf(t *testing.T, parts ...[]byte) string {
+	t.Helper()
+	whole := md5.New()
+	for _, part := range parts {
+		sum := md5sum(part)
+		whole.Write(sum)
+	}
+	return fmt.Sprintf("%s-%d", hex.EncodeToString(whole.Sum(nil)), len(parts))
 }
 
 func TestStoreListObjectsDelimiterPagination(t *testing.T) {
@@ -690,7 +671,7 @@ func TestStoreLogsPutObjectDecisionForSingleUpload(t *testing.T) {
 		t.Fatalf("PutObject returned error: %v", err)
 	}
 	output := logs.String()
-	if !strings.Contains(output, `event=put_object_decision bucket="photos" key="hello.txt" size=5`) || !strings.Contains(output, `telegram_type="document"`) || !strings.Contains(output, `strategy="document"`) || !strings.Contains(output, `chunked=false`) || !strings.Contains(output, `chunk_size=0`) || !strings.Contains(output, `chunk_count=1`) {
+	if !strings.Contains(output, `event=put_object_decision bucket="photos" key="hello.txt" size=5`) || !strings.Contains(output, `telegram_type="document"`) || !strings.Contains(output, `strategy="document"`) {
 		t.Fatalf("decision log output = %q", output)
 	}
 }
@@ -833,7 +814,7 @@ func TestStoreCompleteMultipartUploadValidatesParts(t *testing.T) {
 
 func TestStoreMultipartRangeGetAcrossVariableChunks(t *testing.T) {
 	ctx := context.Background()
-	objectStore, fake := newReadyTestObjectStoreWithUploadConfig(t, map[string]string{"photos": "-100"}, UploadConfig{Strategy: "document", EnableChunking: true, MaxFileSize: 50, ChunkSize: 3, TypeLimits: map[string]int64{"document": 3}, PutBufferSize: 2})
+	objectStore, fake := newReadyTestObjectStoreWithUploadConfig(t, map[string]string{"photos": "-100"}, UploadConfig{Strategy: "document", MaxFileSize: 50, TypeLimits: map[string]int64{"document": 50}, PutBufferSize: 2})
 	created, err := objectStore.CreateMultipartUpload(ctx, CreateMultipartUploadInput{Bucket: "photos", Key: "big.bin", ContentType: "application/octet-stream"})
 	if err != nil {
 		t.Fatalf("CreateMultipartUpload returned error: %v", err)
@@ -921,7 +902,7 @@ func TestStoreCreateMultipartUploadEvictsOldestSession(t *testing.T) {
 
 func TestStoreCompleteMultipartUploadCommitsChunksAndMultipartETag(t *testing.T) {
 	ctx := context.Background()
-	objectStore, fake := newReadyTestObjectStoreWithUploadConfig(t, map[string]string{"photos": "-100"}, UploadConfig{Strategy: "document", EnableChunking: true, MaxFileSize: 50, ChunkSize: 3, TypeLimits: map[string]int64{"document": 3}, PutBufferSize: 2})
+	objectStore, fake := newReadyTestObjectStoreWithUploadConfig(t, map[string]string{"photos": "-100"}, UploadConfig{Strategy: "document", MaxFileSize: 50, TypeLimits: map[string]int64{"document": 50}, PutBufferSize: 2})
 	created, err := objectStore.CreateMultipartUpload(ctx, CreateMultipartUploadInput{Bucket: "photos", Key: "big.bin", ContentType: "application/octet-stream"})
 	if err != nil {
 		t.Fatalf("CreateMultipartUpload returned error: %v", err)
@@ -939,8 +920,10 @@ func TestStoreCompleteMultipartUploadCommitsChunksAndMultipartETag(t *testing.T)
 	if err != nil {
 		t.Fatalf("CompleteMultipartUpload returned error: %v", err)
 	}
-	if completed.ETag != "1c4bb33d6bb358e9305bd0e3f40b1552-2" {
-		t.Fatalf("complete etag = %q", completed.ETag)
+	// Multipart ETag is md5(md5(part1) || md5(part2)) + "-<partcount>".
+	wantETag := multipartETagOf(t, []byte("abcde"), []byte("fghi"))
+	if completed.ETag != wantETag {
+		t.Fatalf("complete etag = %q, want %q", completed.ETag, wantETag)
 	}
 
 	reader, info, err := objectStore.GetObject(ctx, GetObjectInput{Bucket: "photos", Key: "big.bin"})
@@ -958,14 +941,14 @@ func TestStoreCompleteMultipartUploadCommitsChunksAndMultipartETag(t *testing.T)
 	if info.Size != 9 || info.ETag != completed.ETag || info.SHA256 != "" {
 		t.Fatalf("info = %+v", info)
 	}
-	if len(fake.Uploads) != 4 {
-		t.Fatalf("uploads = %d, want 4", len(fake.Uploads))
+	if len(fake.Uploads) != 2 {
+		t.Fatalf("uploads = %d, want 2 (one message per part)", len(fake.Uploads))
 	}
 }
 
-func TestStoreUploadPartSplitsIntoTelegramChunks(t *testing.T) {
+func TestStoreUploadPartUploadsSingleTelegramMessage(t *testing.T) {
 	ctx := context.Background()
-	objectStore, fake := newReadyTestObjectStoreWithUploadConfig(t, map[string]string{"photos": "-100"}, UploadConfig{Strategy: "document", EnableChunking: true, MaxFileSize: 50, ChunkSize: 3, TypeLimits: map[string]int64{"document": 3}, PutBufferSize: 2})
+	objectStore, fake := newReadyTestObjectStoreWithUploadConfig(t, map[string]string{"photos": "-100"}, UploadConfig{Strategy: "document", MaxFileSize: 50, TypeLimits: map[string]int64{"document": 50}, PutBufferSize: 2})
 	created, err := objectStore.CreateMultipartUpload(ctx, CreateMultipartUploadInput{Bucket: "photos", Key: "big.bin", ContentType: "application/octet-stream"})
 	if err != nil {
 		t.Fatalf("CreateMultipartUpload returned error: %v", err)
@@ -978,11 +961,24 @@ func TestStoreUploadPartSplitsIntoTelegramChunks(t *testing.T) {
 	if result.ETag != "e8dc4081b13434b45189a720b77b6818" {
 		t.Fatalf("etag = %q", result.ETag)
 	}
-	if len(fake.Uploads) != 3 {
-		t.Fatalf("uploads = %d, want 3", len(fake.Uploads))
+	if len(fake.Uploads) != 1 {
+		t.Fatalf("uploads = %d, want 1 (one message per part)", len(fake.Uploads))
 	}
-	if fake.Files["file-1"] != "abc" || fake.Files["file-2"] != "def" || fake.Files["file-3"] != "gh" {
+	if fake.Files["file-1"] != "abcdefgh" {
 		t.Fatalf("files = %+v", fake.Files)
+	}
+}
+
+func TestStoreUploadPartRejectsPartOverDocumentLimit(t *testing.T) {
+	ctx := context.Background()
+	objectStore, _ := newReadyTestObjectStoreWithUploadConfig(t, map[string]string{"photos": "-100"}, UploadConfig{Strategy: "document", MaxFileSize: 50, TypeLimits: map[string]int64{"document": 4}, PutBufferSize: 2})
+	created, err := objectStore.CreateMultipartUpload(ctx, CreateMultipartUploadInput{Bucket: "photos", Key: "big.bin", ContentType: "application/octet-stream"})
+	if err != nil {
+		t.Fatalf("CreateMultipartUpload returned error: %v", err)
+	}
+	_, err = objectStore.UploadPart(ctx, UploadPartInput{Bucket: "photos", Key: "big.bin", UploadID: created.UploadID, PartNumber: 1, Size: 8, Body: strings.NewReader("abcdefgh")})
+	if err != ErrEntityTooLarge {
+		t.Fatalf("err = %v, want ErrEntityTooLarge", err)
 	}
 }
 

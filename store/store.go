@@ -13,7 +13,6 @@ import (
 	"log"
 	"path"
 	"regexp"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -71,7 +70,7 @@ type multipartChunk struct {
 
 func NewObjectStore(meta metadata.Store, tg telegram.Client, options Options) (*ObjectStore, error) {
 	upload := options.Upload
-	if upload.Strategy == "" && upload.MaxFileSize == 0 && upload.ChunkSize == 0 && upload.TypeLimits == nil && upload.PutBufferSize == 0 {
+	if upload.Strategy == "" && upload.MaxFileSize == 0 && upload.TypeLimits == nil && upload.PutBufferSize == 0 {
 		upload = DefaultUploadConfig()
 	} else {
 		defaults := DefaultUploadConfig()
@@ -80,9 +79,6 @@ func NewObjectStore(meta metadata.Store, tg telegram.Client, options Options) (*
 		}
 		if upload.MaxFileSize == 0 {
 			upload.MaxFileSize = defaults.MaxFileSize
-		}
-		if upload.ChunkSize == 0 {
-			upload.ChunkSize = defaults.ChunkSize
 		}
 		if upload.TypeLimits == nil {
 			upload.TypeLimits = defaults.TypeLimits
@@ -177,28 +173,16 @@ func (s *ObjectStore) PutObject(ctx context.Context, input PutObjectInput) (PutO
 	if err != nil {
 		return PutObjectResult{}, err
 	}
-	chunkSize := int64(0)
-	chunkCount := 1
-	if strategy.Chunked {
-		chunkSize = strategy.ChunkSize
-		if chunkSize <= 0 {
-			chunkSize = s.options.Upload.ChunkSize
-		}
-		chunkCount = int((input.Size + chunkSize - 1) / chunkSize)
-	}
-	s.logger.Printf("debug event=put_object_decision bucket=%q key=%q size=%d telegram_type=%q strategy=%q chunked=%t chunk_size=%d chunk_count=%d", input.Bucket, input.Key, input.Size, strategy.TelegramType, strategy.UploadStrategy, strategy.Chunked, chunkSize, chunkCount)
+	s.logger.Printf("debug event=put_object_decision bucket=%q key=%q size=%d telegram_type=%q strategy=%q", input.Bucket, input.Key, input.Size, strategy.TelegramType, strategy.UploadStrategy)
 
 	if input.Size == 0 {
 		return s.putEmpty(ctx, input, strategy)
 	}
-	if !strategy.Chunked {
-		limit := s.options.Upload.TypeLimits[strategy.TelegramType]
-		if limit > 0 && input.Size > limit {
-			return PutObjectResult{}, ErrEntityTooLarge
-		}
-		return s.putSingle(ctx, input, strategy)
+	limit := s.options.Upload.TypeLimits[strategy.TelegramType]
+	if limit > 0 && input.Size > limit {
+		return PutObjectResult{}, ErrEntityTooLarge
 	}
-	return s.putChunked(ctx, input, strategy)
+	return s.putSingle(ctx, input, strategy)
 }
 
 func (s *ObjectStore) CreateMultipartUpload(ctx context.Context, input CreateMultipartUploadInput) (CreateMultipartUploadResult, error) {
@@ -316,76 +300,48 @@ func (s *ObjectStore) UploadPart(ctx context.Context, input UploadPartInput) (Up
 }
 
 func (s *ObjectStore) uploadMultipartPartChunks(ctx context.Context, input UploadPartInput, contentType string) ([]multipartChunk, string, []byte, int64, error) {
-	md5Hash := md5.New()
-	chunkSize := s.options.Upload.ChunkSize
-	if chunkSize <= 0 {
-		chunkSize = DefaultUploadConfig().ChunkSize
-	}
 	limit := s.options.Upload.TypeLimits[telegram.TypeDocument]
-	if limit > 0 && chunkSize > limit {
-		chunkSize = limit
-	}
-	if chunkSize <= 0 {
+	if limit > 0 && input.Size > limit {
 		return nil, "", nil, 0, ErrEntityTooLarge
 	}
 
-	chunks := []multipartChunk{}
-	uploads := []uploadRecord{}
-	remaining := input.Size
-	partIndex := 1
-	for remaining > 0 {
-		thisChunkSize := chunkSize
-		if remaining < thisChunkSize {
-			thisChunkSize = remaining
-		}
-		data := make([]byte, thisChunkSize)
-		read, err := io.ReadFull(input.Body, data)
-		if err != nil {
-			if len(uploads) > 0 {
-				s.logOrphanUpload(input.Bucket, input.Key, uploads, err)
-			}
-			return nil, "", nil, 0, err
-		}
-		if int64(read) != thisChunkSize {
-			return nil, "", nil, 0, fmt.Errorf("copied %d bytes, want %d", read, thisChunkSize)
-		}
-		partData := data[:read]
-		_, _ = md5Hash.Write(partData)
-		chunkSHA := sha256.Sum256(partData)
-		totalParts := int((input.Size + chunkSize - 1) / chunkSize)
-		uploaded, err := s.uploadTelegram(ctx, telegram.UploadRequest{
-			Type:     telegram.TypeDocument,
-			ChatID:   s.bucketChatID(input.Bucket),
-			Reader:   bytes.NewReader(partData),
-			Filename: path.Base(input.Key),
-			MIMEType: contentType,
-			Caption:  s.renderCaption(PutObjectInput{Bucket: input.Bucket, Key: input.Key, ContentType: contentType, Size: input.Size}, partIndex, totalParts),
-		})
-		if err != nil {
-			if len(uploads) > 0 {
-				s.logOrphanUpload(input.Bucket, input.Key, uploads, err)
-			}
-			return nil, "", nil, 0, err
-		}
-		uploads = append(uploads, uploadRecord{FileID: uploaded.FileID, MessageID: uploaded.MessageID})
-		chunks = append(chunks, multipartChunk{
-			size:                 int64(len(partData)),
-			telegramType:         uploaded.Type,
-			telegramFileID:       uploaded.FileID,
-			telegramMessageID:    uploaded.MessageID,
-			telegramFileUniqueID: uploaded.FileUniqueID,
-			sha256:               hex.EncodeToString(chunkSHA[:]),
-		})
-		remaining -= int64(len(partData))
-		partIndex++
+	data := make([]byte, input.Size)
+	read, err := io.ReadFull(input.Body, data)
+	if err != nil {
+		return nil, "", nil, 0, err
+	}
+	if int64(read) != input.Size {
+		return nil, "", nil, 0, fmt.Errorf("copied %d bytes, want %d", read, input.Size)
 	}
 	if extra, err := io.ReadAll(input.Body); err != nil {
 		return nil, "", nil, 0, err
 	} else if len(extra) > 0 {
 		return nil, "", nil, 0, fmt.Errorf("copied %d bytes, want %d", input.Size+int64(len(extra)), input.Size)
 	}
-	md5Bytes := md5Hash.Sum(nil)
-	return chunks, hex.EncodeToString(md5Bytes), md5Bytes, input.Size, nil
+
+	md5Sum := md5.Sum(data)
+	chunkSHA := sha256.Sum256(data)
+	uploaded, err := s.uploadTelegram(ctx, telegram.UploadRequest{
+		Type:     telegram.TypeDocument,
+		ChatID:   s.bucketChatID(input.Bucket),
+		Reader:   bytes.NewReader(data),
+		Filename: path.Base(input.Key),
+		MIMEType: contentType,
+		Caption:  s.renderCaption(PutObjectInput{Bucket: input.Bucket, Key: input.Key, ContentType: contentType, Size: input.Size}, 1, 1),
+	})
+	if err != nil {
+		return nil, "", nil, 0, err
+	}
+
+	chunks := []multipartChunk{{
+		size:                 input.Size,
+		telegramType:         uploaded.Type,
+		telegramFileID:       uploaded.FileID,
+		telegramMessageID:    uploaded.MessageID,
+		telegramFileUniqueID: uploaded.FileUniqueID,
+		sha256:               hex.EncodeToString(chunkSHA[:]),
+	}}
+	return chunks, hex.EncodeToString(md5Sum[:]), md5Sum[:], input.Size, nil
 }
 
 func (s *ObjectStore) logMultipartPartOrphans(bucket, key string, part multipartPart, err error) {
@@ -868,178 +824,6 @@ func (s *ObjectStore) putSingle(ctx context.Context, input PutObjectInput, strat
 	if err := s.meta.PutObject(ctx, object, chunks); err != nil {
 		s.logMetadataPutObject(input.Bucket, input.Key, len(chunks), etag, err)
 		s.logOrphanUpload(input.Bucket, input.Key, []uploadRecord{{FileID: uploaded.FileID, MessageID: uploaded.MessageID}}, err)
-		return PutObjectResult{}, err
-	}
-	s.logMetadataPutObject(input.Bucket, input.Key, len(chunks), etag, nil)
-	return PutObjectResult{ETag: etag}, nil
-}
-
-func (s *ObjectStore) putChunked(ctx context.Context, input PutObjectInput, strategy UploadStrategy) (PutObjectResult, error) {
-	wholeMD5 := md5.New()
-	wholeSHA := sha256.New()
-	now := time.Now().UTC()
-	chunkSize := strategy.ChunkSize
-	if chunkSize <= 0 {
-		chunkSize = s.options.Upload.ChunkSize
-	}
-	parts := int((input.Size + chunkSize - 1) / chunkSize)
-	s.logger.Printf("debug event=put_object_chunking bucket=%q key=%q size=%d chunk_size=%d chunk_count=%d", input.Bucket, input.Key, input.Size, chunkSize, parts)
-
-	// 第一步:读取所有切片到内存
-	type chunkData struct {
-		partNumber int
-		offset     int64
-		data       []byte
-		sha256     [32]byte
-	}
-	chunkList := make([]chunkData, 0, parts)
-	offset := int64(0)
-	remaining := input.Size
-	part := 1
-
-	for remaining > 0 {
-		thisChunkSize := chunkSize
-		if remaining < thisChunkSize {
-			thisChunkSize = remaining
-		}
-		data := make([]byte, thisChunkSize)
-		read, err := io.ReadFull(input.Body, data)
-		if err != nil {
-			return PutObjectResult{}, err
-		}
-		if int64(read) != thisChunkSize {
-			return PutObjectResult{}, fmt.Errorf("copied %d bytes, want %d", read, thisChunkSize)
-		}
-		partData := data[:read]
-		_, _ = wholeMD5.Write(partData)
-		_, _ = wholeSHA.Write(partData)
-		chunkSHA := sha256.Sum256(partData)
-
-		chunkList = append(chunkList, chunkData{
-			partNumber: part,
-			offset:     offset,
-			data:       partData,
-			sha256:     chunkSHA,
-		})
-
-		offset += int64(len(partData))
-		remaining -= int64(len(partData))
-		part++
-	}
-
-	// 第二步:并行上传所有切片
-	type uploadResult struct {
-		partNumber int
-		chunk      metadata.Chunk
-		upload     uploadRecord
-		err        error
-	}
-
-	resultChan := make(chan uploadResult, len(chunkList))
-	var wg sync.WaitGroup
-
-	for _, chunk := range chunkList {
-		wg.Add(1)
-		go func(c chunkData) {
-			defer wg.Done()
-
-			s.logger.Printf("debug event=telegram_upload_part bucket=%q key=%q part=%d parts=%d media_type=%q", input.Bucket, input.Key, c.partNumber, parts, telegram.TypeDocument)
-			uploaded, err := s.uploadTelegram(ctx, telegram.UploadRequest{
-				Type:     telegram.TypeDocument,
-				ChatID:   s.bucketChatID(input.Bucket),
-				Reader:   bytes.NewReader(c.data),
-				Filename: path.Base(input.Key),
-				MIMEType: input.ContentType,
-				Caption:  s.renderCaption(input, c.partNumber, parts),
-			})
-
-			if err != nil {
-				resultChan <- uploadResult{partNumber: c.partNumber, err: err}
-				return
-			}
-
-			s.logger.Printf("debug event=telegram_upload_part_result bucket=%q key=%q part=%d message_id=%d file_id_returned=%t", input.Bucket, input.Key, c.partNumber, uploaded.MessageID, uploaded.FileID != "")
-
-			resultChan <- uploadResult{
-				partNumber: c.partNumber,
-				chunk: metadata.Chunk{
-					Bucket:               input.Bucket,
-					Key:                  input.Key,
-					PartNumber:           c.partNumber,
-					Offset:               c.offset,
-					Size:                 int64(len(c.data)),
-					TelegramType:         uploaded.Type,
-					TelegramFileID:       uploaded.FileID,
-					TelegramMessageID:    uploaded.MessageID,
-					TelegramFileUniqueID: uploaded.FileUniqueID,
-					SHA256:               hex.EncodeToString(c.sha256[:]),
-				},
-				upload: uploadRecord{FileID: uploaded.FileID, MessageID: uploaded.MessageID},
-			}
-		}(chunk)
-	}
-
-	// 等待所有上传完成
-	go func() {
-		wg.Wait()
-		close(resultChan)
-	}()
-
-	// 收集结果并按 part number 排序
-	results := make([]uploadResult, 0, len(chunkList))
-	for result := range resultChan {
-		if result.err != nil {
-			// 如果有错误,等待其他 goroutine 完成后返回
-			for range resultChan {
-			}
-			uploads := make([]uploadRecord, 0)
-			for _, r := range results {
-				if r.err == nil {
-					uploads = append(uploads, r.upload)
-				}
-			}
-			if len(uploads) > 0 {
-				s.logOrphanUpload(input.Bucket, input.Key, uploads, result.err)
-			}
-			return PutObjectResult{}, result.err
-		}
-		results = append(results, result)
-	}
-
-	// 按 partNumber 排序
-	sort.Slice(results, func(i, j int) bool {
-		return results[i].partNumber < results[j].partNumber
-	})
-
-	// 构建最终的 chunks 和 uploads
-	chunks := make([]metadata.Chunk, len(results))
-	uploads := make([]uploadRecord, len(results))
-	for i, result := range results {
-		chunks[i] = result.chunk
-		uploads[i] = result.upload
-	}
-	if extra, err := io.ReadAll(input.Body); err != nil {
-		return PutObjectResult{}, err
-	} else if len(extra) > 0 {
-		return PutObjectResult{}, fmt.Errorf("copied %d bytes, want %d", input.Size+int64(len(extra)), input.Size)
-	}
-	etag := hex.EncodeToString(wholeMD5.Sum(nil))
-	shaSum := hex.EncodeToString(wholeSHA.Sum(nil))
-	object := metadata.Object{
-		Bucket:         input.Bucket,
-		Key:            input.Key,
-		Size:           input.Size,
-		ContentType:    input.ContentType,
-		ETag:           etag,
-		SHA256:         shaSum,
-		LastModified:   now,
-		ChunkCount:     len(chunks),
-		TelegramType:   telegram.TypeDocument,
-		UploadStrategy: strategy.UploadStrategy,
-	}
-	if err := s.meta.PutObject(ctx, object, chunks); err != nil {
-		s.logMetadataPutObject(input.Bucket, input.Key, len(chunks), etag, err)
-		s.logOrphanUpload(input.Bucket, input.Key, uploads, err)
 		return PutObjectResult{}, err
 	}
 	s.logMetadataPutObject(input.Bucket, input.Key, len(chunks), etag, nil)

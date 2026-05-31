@@ -111,20 +111,16 @@ type ListObjectsResult struct {
 }
 
 type UploadConfig struct {
-	Strategy       string
-	EnableChunking bool
-	MaxFileSize    int64
-	ChunkSize      int64
-	TypeLimits     map[string]int64
-	PutBufferSize  int
+	Strategy      string
+	MaxFileSize   int64
+	TypeLimits    map[string]int64
+	PutBufferSize int
 }
 
 func DefaultUploadConfig() UploadConfig {
 	return UploadConfig{
-		Strategy:       "document",
-		EnableChunking: true,
-		MaxFileSize:    1 * 1024 * 1024 * 1024,
-		ChunkSize:      20 * 1024 * 1024,
+		Strategy:    "document",
+		MaxFileSize: 50 * 1024 * 1024,
 		TypeLimits: map[string]int64{
 			"photo":     10 * 1024 * 1024,
 			"video":     20 * 1024 * 1024,

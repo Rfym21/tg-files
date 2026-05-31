@@ -4,6 +4,9 @@
 /tgnas
 *.sqlite*
 
+# Air hot-reload build output
+/tmp/
+
 .worktrees
 .claude/worktrees
 .claude/settings.local.json

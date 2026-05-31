@@ -12,8 +12,6 @@ type UploadStrategyResolver struct {
 type UploadStrategy struct {
 	TelegramType   string
 	UploadStrategy string
-	Chunked        bool
-	ChunkSize      int64
 }
 
 func NewUploadStrategyResolver(config UploadConfig) *UploadStrategyResolver {
@@ -49,26 +47,11 @@ func (r *UploadStrategyResolver) resolveAuto(filename, contentType string, size 
 	return r.resolveDocument(size)
 }
 
+// resolveDocument always uploads as a single Telegram document. The overall
+// size cap is enforced in Resolve via MaxFileSize, so reaching here means the
+// file fits and no chunking is performed.
 func (r *UploadStrategyResolver) resolveDocument(size int64) (UploadStrategy, error) {
-	documentLimit := r.config.TypeLimits["document"]
-	if withinLimit(size, documentLimit) {
-		return UploadStrategy{TelegramType: "document", UploadStrategy: "document"}, nil
-	}
-	if r.config.EnableChunking {
-		chunkSize := r.config.ChunkSize
-		if chunkSize <= 0 {
-			chunkSize = DefaultUploadConfig().ChunkSize
-		}
-
-		return UploadStrategy{
-			TelegramType:   "document",
-			UploadStrategy: "chunked_document",
-			Chunked:        true,
-			ChunkSize:      chunkSize,
-		}, nil
-	}
-
-	return UploadStrategy{}, ErrEntityTooLarge
+	return UploadStrategy{TelegramType: "document", UploadStrategy: "document"}, nil
 }
 
 func inferTelegramType(filename, contentType string) string {

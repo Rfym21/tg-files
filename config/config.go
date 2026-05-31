@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"net/netip"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -70,6 +71,7 @@ type CredentialConfig struct {
 type TelegramConfig struct {
 	BotTokenEnv     string        `yaml:"bot_token_env"`
 	APIBaseURL      string        `yaml:"api_base_url"`
+	APIBaseURLEnv   string        `yaml:"api_base_url_env"`
 	CaptionTemplate string        `yaml:"caption_template"`
 	Timeout         time.Duration `yaml:"-"`
 	RawTimeout      Duration      `yaml:"timeout"`
@@ -83,9 +85,6 @@ type MetadataConfig struct {
 
 type StorageConfig struct {
 	UploadTypeStrategy            string           `yaml:"upload_type_strategy"`
-	EnableChunking                *bool            `yaml:"enable_chunking"`
-	MaxFileSize                   int64            `yaml:"max_file_size"`
-	ChunkSize                     int64            `yaml:"chunk_size"`
 	TypeSizeLimits                map[string]int64 `yaml:"type_size_limits"`
 	MaxConcurrentUploads          int              `yaml:"max_concurrent_uploads"`
 	MaxConcurrentDownloads        int              `yaml:"max_concurrent_downloads"`
@@ -157,6 +156,15 @@ func LoadFile(path string) (Config, error) {
 		cfg.Telegram.Timeout = time.Duration(cfg.Telegram.RawTimeout)
 	}
 
+	// api_base_url_env, when set and non-empty, overrides api_base_url. This lets
+	// deployments point at a self-hosted Bot API server via env var (e.g. Docker)
+	// without editing the YAML, mirroring listen_env / sqlite_path_env.
+	if cfg.Telegram.APIBaseURLEnv != "" {
+		if value := os.Getenv(cfg.Telegram.APIBaseURLEnv); value != "" {
+			cfg.Telegram.APIBaseURL = value
+		}
+	}
+
 	applyStorageDefaults(&cfg.Storage)
 	cfg.applyWebDAVDefaults()
 
@@ -179,9 +187,6 @@ func LoadFile(path string) (Config, error) {
 func DefaultStorageConfig() StorageConfig {
 	return StorageConfig{
 		UploadTypeStrategy: "document",
-		EnableChunking:     boolPtr(true),
-		MaxFileSize:        1 * 1024 * 1024 * 1024,
-		ChunkSize:          20 * 1024 * 1024,
 		TypeSizeLimits: map[string]int64{
 			"photo":     10 * 1024 * 1024,
 			"video":     20 * 1024 * 1024,
@@ -214,6 +219,41 @@ func (c Config) ResolveSecret(envName string) string {
 
 func (c Config) ResolveBotToken() string {
 	return c.ResolveSecret(c.Telegram.BotTokenEnv)
+}
+
+const (
+	// officialTelegramMaxUpload is the sendDocument size cap on the public Bot
+	// API (api.telegram.org). The Bot API also caps photos/videos lower, but
+	// document uploads top out at 50 MB.
+	officialTelegramMaxUpload = 50 * 1024 * 1024
+	// localTelegramMaxUpload is the cap when running a self-hosted Bot API
+	// server in --local mode, which raises the document limit to 2000 MiB.
+	localTelegramMaxUpload = 2000 * 1024 * 1024
+)
+
+// isOfficialTelegramAPI reports whether base targets the public Bot API host.
+// An empty base is treated as official because LoadFile defaults APIBaseURL to
+// https://api.telegram.org.
+func isOfficialTelegramAPI(base string) bool {
+	base = strings.TrimSpace(base)
+	if base == "" {
+		return true
+	}
+	parsed, err := url.Parse(base)
+	if err != nil {
+		return true
+	}
+	return strings.EqualFold(parsed.Hostname(), "api.telegram.org")
+}
+
+// ResolveMaxUploadSize returns the single-file upload limit implied by the
+// configured Telegram API endpoint: 50 MB for the official Bot API and 2000 MiB
+// for a self-hosted (--local) server.
+func (c Config) ResolveMaxUploadSize() int64 {
+	if isOfficialTelegramAPI(c.Telegram.APIBaseURL) {
+		return officialTelegramMaxUpload
+	}
+	return localTelegramMaxUpload
 }
 
 func (c Config) ResolveSQLitePath() (string, error) {
@@ -278,12 +318,6 @@ func (c Config) Validate() error {
 
 	if c.Storage.UploadTypeStrategy != "document" && c.Storage.UploadTypeStrategy != "auto" {
 		return fmt.Errorf("storage upload type strategy must be document or auto")
-	}
-	if c.Storage.MaxFileSize <= 0 {
-		return fmt.Errorf("storage max file size must be positive")
-	}
-	if c.Storage.ChunkSize <= 0 {
-		return fmt.Errorf("storage chunk size must be positive")
 	}
 	if c.Storage.TypeSizeLimits["document"] <= 0 {
 		return fmt.Errorf("storage document type size limit must be positive")
@@ -381,15 +415,6 @@ func applyStorageDefaults(storage *StorageConfig) {
 	if storage.UploadTypeStrategy == "" {
 		storage.UploadTypeStrategy = defaults.UploadTypeStrategy
 	}
-	if storage.EnableChunking == nil {
-		storage.EnableChunking = boolPtr(*defaults.EnableChunking)
-	}
-	if storage.MaxFileSize == 0 {
-		storage.MaxFileSize = defaults.MaxFileSize
-	}
-	if storage.ChunkSize == 0 {
-		storage.ChunkSize = defaults.ChunkSize
-	}
 	if storage.TypeSizeLimits == nil {
 		storage.TypeSizeLimits = map[string]int64{}
 	}
@@ -423,8 +448,4 @@ func resolveBucketChatID(value string) (string, error) {
 		return os.Getenv(envName), nil
 	}
 	return value, nil
-}
-
-func boolPtr(v bool) *bool {
-	return &v
 }

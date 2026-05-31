@@ -51,15 +51,6 @@ buckets:
 	if cfg.Storage.UploadTypeStrategy != "document" {
 		t.Fatalf("strategy = %q", cfg.Storage.UploadTypeStrategy)
 	}
-	if cfg.Storage.ChunkSize != 20*1024*1024 {
-		t.Fatalf("chunk size = %d", cfg.Storage.ChunkSize)
-	}
-	if cfg.Storage.MaxFileSize != 1024*1024*1024 {
-		t.Fatalf("max file size = %d", cfg.Storage.MaxFileSize)
-	}
-	if cfg.Storage.EnableChunking == nil || !*cfg.Storage.EnableChunking {
-		t.Fatalf("enable_chunking = %v, want true", cfg.Storage.EnableChunking)
-	}
 	if got := cfg.ResolveSecret(cfg.Auth.Credentials[0].SecretKeyEnv); got != "secret" {
 		t.Fatalf("secret = %q", got)
 	}
@@ -191,39 +182,27 @@ buckets:
 	}
 }
 
-func TestLoadConfigAllowsDisablingChunking(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "config.yaml")
-	err := os.WriteFile(path, []byte(`
-server:
-  listen: ":9000"
-auth:
-  region: "us-east-1"
-  credentials:
-    - access_key: "admin"
-      secret_key_env: "SECRET"
-telegram:
-  bot_token_env: "BOT_TOKEN"
-  api_base_url: "https://api.telegram.org"
-metadata:
-  driver: "sqlite"
-  sqlite_path: "/tmp/tgnas.sqlite"
-storage:
-  upload_type_strategy: "document"
-  enable_chunking: false
-buckets:
-  photos:
-    chat_id: "-100123"
-`), 0o600)
-	if err != nil {
-		t.Fatal(err)
+func TestResolveMaxUploadSizeOfficialAPI(t *testing.T) {
+	cfg := minimalValidConfig()
+	cfg.Telegram.APIBaseURL = "https://api.telegram.org"
+	if got := cfg.ResolveMaxUploadSize(); got != officialTelegramMaxUpload {
+		t.Fatalf("max upload = %d, want %d", got, officialTelegramMaxUpload)
 	}
-	cfg, err := LoadFile(path)
-	if err != nil {
-		t.Fatalf("LoadFile returned error: %v", err)
+}
+
+func TestResolveMaxUploadSizeEmptyBaseTreatedAsOfficial(t *testing.T) {
+	cfg := minimalValidConfig()
+	cfg.Telegram.APIBaseURL = ""
+	if got := cfg.ResolveMaxUploadSize(); got != officialTelegramMaxUpload {
+		t.Fatalf("max upload = %d, want %d", got, officialTelegramMaxUpload)
 	}
-	if cfg.Storage.EnableChunking == nil || *cfg.Storage.EnableChunking {
-		t.Fatalf("enable_chunking = %v, want false", cfg.Storage.EnableChunking)
+}
+
+func TestResolveMaxUploadSizeSelfHostedAPI(t *testing.T) {
+	cfg := minimalValidConfig()
+	cfg.Telegram.APIBaseURL = "http://localhost:8081"
+	if got := cfg.ResolveMaxUploadSize(); got != localTelegramMaxUpload {
+		t.Fatalf("max upload = %d, want %d", got, localTelegramMaxUpload)
 	}
 }
 

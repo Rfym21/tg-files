@@ -821,14 +821,22 @@ func runServiceWithDebug(configPath string, mode serverMode, dbg debugLogger) er
 	}
 
 	tg := telegram.NewHTTPClient(botToken, cfg.Telegram.APIBaseURL, &http.Client{Timeout: cfg.Telegram.Timeout})
+	// The single-file upload ceiling follows the Telegram endpoint: 50 MB on the
+	// public Bot API, 2000 MiB on a self-hosted (--local) server. The document
+	// per-type limit is aligned to the same ceiling so document PUTs are bounded
+	// by it rather than the 20 MB default.
+	maxUpload := cfg.ResolveMaxUploadSize()
+	typeLimits := make(map[string]int64, len(cfg.Storage.TypeSizeLimits))
+	for name, limit := range cfg.Storage.TypeSizeLimits {
+		typeLimits[name] = limit
+	}
+	typeLimits[telegram.TypeDocument] = maxUpload
 	objectStore, err := newObjectStore(meta, tg, store.Options{
 		Upload: store.UploadConfig{
-			Strategy:       cfg.Storage.UploadTypeStrategy,
-			EnableChunking: *cfg.Storage.EnableChunking,
-			MaxFileSize:    cfg.Storage.MaxFileSize,
-			ChunkSize:      cfg.Storage.ChunkSize,
-			TypeLimits:     cfg.Storage.TypeSizeLimits,
-			PutBufferSize:  cfg.Storage.PutBufferSize,
+			Strategy:      cfg.Storage.UploadTypeStrategy,
+			MaxFileSize:   maxUpload,
+			TypeLimits:    typeLimits,
+			PutBufferSize: cfg.Storage.PutBufferSize,
 		},
 		Caption:          caption,
 		MaxUploads:       cfg.Storage.MaxConcurrentUploads,

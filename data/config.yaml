@@ -24,8 +24,9 @@ auth:
 telegram:
   bot_token_env: "TGNAS_TELEGRAM_BOT_TOKEN"
   # api_base_url: "https://api.telegram.org"
+  api_base_url_env: "TELEGRAM_API_SERVER"   # 非空时覆盖 api_base_url；自建服务器自动启用 2GB 上限
   # caption_template: "{bucket}/{key}"
-  # timeout: "5m"
+  timeout: "10m"
 
 metadata:
   # sqlite_path: "data/metadata.sqlite"
@@ -47,10 +48,10 @@ storage:
   #   audio: 20971520
   #   animation: 20971520
   #   document: 20971520
-  # max_concurrent_uploads: 4
-  # max_concurrent_downloads: 16
-  # max_concurrent_telegram_requests: 8
-  # put_buffer_size: 1048576
+  max_concurrent_uploads: 32              # 同时处理的上传任务数(原 4)
+  max_concurrent_downloads: 64            # 同时处理的下载任务数(原 16)
+  max_concurrent_telegram_requests: 64    # 实际打到 Telegram 的并发上限(原 8)
+  put_buffer_size: 8388608                # 单次写缓冲 8MB(原 1MB),减少 syscall 次数
 
 webdav:
   # prefix: "/dav/"
