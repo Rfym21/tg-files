@@ -72,8 +72,7 @@ export function Files() {
   }, [bucket, refresh]);
 
   const onUploaded = (res: UploadResponse) => {
-    refresh();
-    if (res.link) setActiveLink(res.link);
+    // 不再自动弹窗显示链接，用户可以通过文件列表中的"生成直链"按钮查看
   };
 
   const onDelete = async (key: string) => {
@@ -139,7 +138,7 @@ export function Files() {
       {error && <div className="banner-error">{error}</div>}
 
       <div className="surface" style={{ marginBottom: "var(--space-5)" }}>
-        <Uploader bucket={bucket} onUploaded={onUploaded} />
+        <Uploader bucket={bucket} onUploaded={onUploaded} onBatchComplete={refresh} />
       </div>
 
       <div className="surface surface--flush">

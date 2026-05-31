@@ -21,6 +21,17 @@ func TestDocumentStrategyAlwaysUsesDocumentWithinLimit(t *testing.T) {
 	}
 }
 
+func TestDefaultUploadConfigAllowsLargeMultipartUploads(t *testing.T) {
+	config := DefaultUploadConfig()
+
+	if config.MaxFileSize != 1024*1024*1024 {
+		t.Fatalf("MaxFileSize = %d, want 1073741824", config.MaxFileSize)
+	}
+	if config.ChunkSize != 20*1024*1024 {
+		t.Fatalf("ChunkSize = %d, want 20971520", config.ChunkSize)
+	}
+}
+
 func TestAutoStrategyInfersPhoto(t *testing.T) {
 	config := DefaultUploadConfig()
 	config.Strategy = "auto"

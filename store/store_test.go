@@ -709,6 +709,16 @@ func TestStorePutSingleReturnsPromptlyWhenUploadFailsWithoutReading(t *testing.T
 	uploadErr := errors.New("upload failed early")
 	fake := testutil.NewFakeTelegram()
 	fake.UploadFunc = func(ctx context.Context, request telegram.UploadRequest) (telegram.UploadedFile, error) {
+		if _, ok := request.Reader.(io.ReadSeeker); !ok {
+			t.Fatal("upload reader is not seekable")
+		}
+		data, readErr := io.ReadAll(request.Reader)
+		if readErr != nil {
+			return telegram.UploadedFile{}, readErr
+		}
+		if string(data) != "hello" {
+			return telegram.UploadedFile{}, fmt.Errorf("upload payload = %q, want %q", string(data), "hello")
+		}
 		return telegram.UploadedFile{}, uploadErr
 	}
 	store := mustNewObjectStore(t, meta, fake, Options{Upload: DefaultUploadConfig()})

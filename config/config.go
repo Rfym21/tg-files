@@ -135,7 +135,7 @@ func LoadFile(path string) (Config, error) {
 		Auth:   AuthConfig{Region: "us-east-1"},
 		Telegram: TelegramConfig{
 			APIBaseURL: "https://api.telegram.org",
-			Timeout:    30 * time.Second,
+			Timeout:    5 * time.Minute,
 		},
 		Metadata: MetadataConfig{Driver: "sqlite", SQLitePath: "data/metadata.sqlite"},
 		Storage:  DefaultStorageConfig(),
@@ -180,7 +180,7 @@ func DefaultStorageConfig() StorageConfig {
 	return StorageConfig{
 		UploadTypeStrategy: "document",
 		EnableChunking:     boolPtr(true),
-		MaxFileSize:        50 * 1024 * 1024,
+		MaxFileSize:        1 * 1024 * 1024 * 1024,
 		ChunkSize:          20 * 1024 * 1024,
 		TypeSizeLimits: map[string]int64{
 			"photo":     10 * 1024 * 1024,

@@ -123,7 +123,7 @@ func DefaultUploadConfig() UploadConfig {
 	return UploadConfig{
 		Strategy:       "document",
 		EnableChunking: true,
-		MaxFileSize:    50 * 1024 * 1024,
+		MaxFileSize:    1 * 1024 * 1024 * 1024,
 		ChunkSize:      20 * 1024 * 1024,
 		TypeLimits: map[string]int64{
 			"photo":     10 * 1024 * 1024,

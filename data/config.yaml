@@ -25,7 +25,7 @@ telegram:
   bot_token_env: "TGNAS_TELEGRAM_BOT_TOKEN"
   # api_base_url: "https://api.telegram.org"
   # caption_template: "{bucket}/{key}"
-  # timeout: "30s"
+  # timeout: "5m"
 
 metadata:
   # sqlite_path: "data/metadata.sqlite"
@@ -39,7 +39,7 @@ storage:
   # otherwise transformed by Telegram. TgNAS stores the Bot API returned file_size
   # for typed uploads, which may differ from the original uploaded byte size.
   # enable_chunking: true
-  # max_file_size: 52428800
+  # max_file_size: 1073741824
   # chunk_size: 20971520
   # type_size_limits:
   #   photo: 10485760

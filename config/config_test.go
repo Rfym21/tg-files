@@ -54,6 +54,9 @@ buckets:
 	if cfg.Storage.ChunkSize != 20*1024*1024 {
 		t.Fatalf("chunk size = %d", cfg.Storage.ChunkSize)
 	}
+	if cfg.Storage.MaxFileSize != 1024*1024*1024 {
+		t.Fatalf("max file size = %d", cfg.Storage.MaxFileSize)
+	}
 	if cfg.Storage.EnableChunking == nil || !*cfg.Storage.EnableChunking {
 		t.Fatalf("enable_chunking = %v, want true", cfg.Storage.EnableChunking)
 	}

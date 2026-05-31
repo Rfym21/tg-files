@@ -61,6 +61,73 @@ func TestClientUploadPhotoUsesPhotoEndpointAndLargestPhoto(t *testing.T) {
 	}
 }
 
+func TestClientUploadAcceptsTelegramMediaFallbacks(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		requestType string
+		wantPath    string
+		response    string
+		wantType    string
+		wantFileID  string
+	}{
+		{
+			name:        "video returned as document",
+			requestType: TypeVideo,
+			wantPath:    "/bottoken/sendVideo",
+			response:    `{"ok":true,"result":{"message_id":80,"document":{"file_id":"doc-video","file_unique_id":"u-doc-video","file_size":7,"mime_type":"video/mp4"}}}`,
+			wantType:    TypeDocument,
+			wantFileID:  "doc-video",
+		},
+		{
+			name:        "video returned as video note",
+			requestType: TypeVideo,
+			wantPath:    "/bottoken/sendVideo",
+			response:    `{"ok":true,"result":{"message_id":81,"video_note":{"file_id":"note-video","file_unique_id":"u-note-video","file_size":8}}}`,
+			wantType:    telegramTypeVideoNote,
+			wantFileID:  "note-video",
+		},
+		{
+			name:        "audio returned as document",
+			requestType: TypeAudio,
+			wantPath:    "/bottoken/sendAudio",
+			response:    `{"ok":true,"result":{"message_id":82,"document":{"file_id":"doc-audio","file_unique_id":"u-doc-audio","file_size":9,"mime_type":"audio/ogg"}}}`,
+			wantType:    TypeDocument,
+			wantFileID:  "doc-audio",
+		},
+		{
+			name:        "audio returned as voice",
+			requestType: TypeAudio,
+			wantPath:    "/bottoken/sendAudio",
+			response:    `{"ok":true,"result":{"message_id":83,"voice":{"file_id":"voice-audio","file_unique_id":"u-voice-audio","file_size":10,"mime_type":"audio/ogg"}}}`,
+			wantType:    telegramTypeVoice,
+			wantFileID:  "voice-audio",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var path string
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				path = r.URL.Path
+				mustDrainBody(t, w, r)
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(tc.response))
+			}))
+			defer server.Close()
+
+			client := NewHTTPClient("token", server.URL, http.DefaultClient)
+			uploaded, err := client.Upload(context.Background(), UploadRequest{Type: tc.requestType, ChatID: "-100", Reader: strings.NewReader("hello"), Filename: "media.bin"})
+			if err != nil {
+				t.Fatalf("Upload returned error: %v", err)
+			}
+			if path != tc.wantPath {
+				t.Fatalf("path = %q, want %q", path, tc.wantPath)
+			}
+			if uploaded.Type != tc.wantType || uploaded.FileID != tc.wantFileID {
+				t.Fatalf("uploaded = %+v, want type %q file_id %q", uploaded, tc.wantType, tc.wantFileID)
+			}
+		})
+	}
+}
+
 func TestClientDownloadStreamUsesGetFilePath(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {

@@ -7,9 +7,11 @@ interface UploaderProps {
   bucket: string;
   prefix?: string;
   onUploaded: (res: UploadResponse) => void;
+  onBatchComplete?: () => void | Promise<void>;
 }
 
 interface FileProgress {
+  id: string;
   name: string;
   loaded: number;
   total: number;
@@ -17,36 +19,45 @@ interface FileProgress {
   error?: string;
 }
 
-export function Uploader({ bucket, prefix = "", onUploaded }: UploaderProps) {
+const uploadConcurrency = 3;
+
+function createUploadId() {
+  return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+export function Uploader({
+  bucket,
+  prefix = "",
+  onUploaded,
+  onBatchComplete,
+}: UploaderProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
   const [items, setItems] = useState<FileProgress[]>([]);
   const [error, setError] = useState<string | null>(null);
 
-  const submitOne = async (file: File, index: number) => {
+  const updateItem = (id: string, updater: (item: FileProgress) => FileProgress) => {
+    setItems((prev) => prev.map((item) => (item.id === id ? updater(item) : item)));
+  };
+
+  const submitOne = async (file: File, id: string) => {
     const key = (prefix ? prefix.replace(/^\/|\/$/g, "") + "/" : "") + file.name;
     try {
+      // 初始化进度为 0
+      updateItem(id, (item) => ({ ...item, loaded: 0, total: file.size }));
+
       const res = await api.uploadFile(bucket, key, file, (loaded, total) => {
-        setItems((prev) => {
-          const next = prev.slice();
-          next[index] = { ...next[index], loaded, total };
-          return next;
-        });
+        // 确保进度更新
+        updateItem(id, (item) => ({ ...item, loaded, total }));
       });
-      setItems((prev) => {
-        const next = prev.slice();
-        next[index] = { ...next[index], status: "done", loaded: file.size };
-        return next;
-      });
+
+      // 上传完成，确保进度显示为 100%
+      updateItem(id, (item) => ({ ...item, status: "done", loaded: file.size, total: file.size }));
       onUploaded(res);
     } catch (err) {
       const message =
         err instanceof ApiClientError ? `${err.code}: ${err.message}` : "上传失败";
-      setItems((prev) => {
-        const next = prev.slice();
-        next[index] = { ...next[index], status: "error", error: message };
-        return next;
-      });
+      updateItem(id, (item) => ({ ...item, status: "error", error: message }));
     }
   };
 
@@ -56,16 +67,36 @@ export function Uploader({ bucket, prefix = "", onUploaded }: UploaderProps) {
       return;
     }
     setError(null);
-    const start = items.length;
-    const initial: FileProgress[] = files.map((f) => ({
-      name: f.name,
+    const queued = files.map((file) => ({
+      id: createUploadId(),
+      file,
+    }));
+    const initial: FileProgress[] = queued.map(({ id, file }) => ({
+      id,
+      name: file.name,
       loaded: 0,
-      total: f.size,
-      status: "uploading",
+      total: file.size,
+      status: "uploading" as const,
     }));
     setItems((prev) => [...prev, ...initial]);
-    for (let i = 0; i < files.length; i++) {
-      await submitOne(files[i], start + i);
+
+    let nextIndex = 0;
+    const workerCount = Math.min(uploadConcurrency, queued.length);
+    const worker = async () => {
+      while (true) {
+        const current = nextIndex;
+        nextIndex += 1;
+        if (current >= queued.length) {
+          return;
+        }
+        await submitOne(queued[current].file, queued[current].id);
+      }
+    };
+
+    try {
+      await Promise.all(Array.from({ length: workerCount }, () => worker()));
+    } finally {
+      await onBatchComplete?.();
     }
   };
 
@@ -128,10 +159,10 @@ export function Uploader({ bucket, prefix = "", onUploaded }: UploaderProps) {
               清除已完成
             </button>
           </div>
-          {items.map((it, i) => {
+          {items.map((it) => {
             const pct = Math.round((it.loaded / Math.max(it.total, 1)) * 100);
             return (
-              <div key={i} className="upload-row">
+              <div key={it.id} className="upload-row">
                 <div className="upload-row__name truncate" title={it.name}>
                   {it.name}
                 </div>

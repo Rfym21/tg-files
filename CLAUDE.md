@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-`tgnas` is a Go service that exposes Telegram as object storage via S3 (SigV4) and WebDAV. Object payload lives in Telegram messages; all object/chunk metadata lives in a local SQLite database. SQLite is the source of truth for listings, ETags, and chunk layout — Telegram is treated as opaque blob storage referenced by `file_id` / `message_id`.
+`tgnas` is a Go service that exposes Telegram as object storage via S3 (SigV4) and WebDAV. Object payload lives in Telegram messages; all object/chunk metadata lives in a local SQLite database. SQLite is the source of truth for listings, ETags, and chunk layout — Telegram is treated as opaque blob storage referenced by `file_id` / `message_id`. An optional browser Web UI (React SPA) sits on top of the same store for interactive login, upload, and shareable direct-download links.
 
 ## Common commands
 
@@ -29,6 +29,11 @@ go test ./store/...                     # one package tree
 go test -run TestCompleteMultipart ./store   # one test
 go test -race ./...                     # with race detector
 
+# Web UI (React SPA in web/, embedded into the Go binary at build time)
+cd web && npm ci                        # install deps
+cd web && npm run dev                   # Vite dev server on :5173, proxies /api and /d to :9000
+cd web && npm run build                 # tsc + vite build -> internal/web/dist/ (consumed by //go:embed)
+
 # Docker
 docker build -t tgnas .
 docker run -p 9000:9000 -v "$PWD/data:/app/data" \
@@ -36,6 +41,8 @@ docker run -p 9000:9000 -v "$PWD/data:/app/data" \
 ```
 
 The `data/config.yaml` resolved path is also where SQLite is created (`data/metadata.sqlite` by default). Tests use temp dirs; SQLite files are gitignored.
+
+`internal/web/spa_dist.go` does `//go:embed all:dist` against `internal/web/dist/`, which Vite (`web/`) populates. That directory is gitignored except for a `.gitkeep`, so a clean checkout has no built assets — `go build` still succeeds but the SPA serves a 503 "web UI not built" until `npm run build` runs. The Dockerfile builds the frontend in a `node:24` stage and copies `dist/` into the Go build stage before `go build`.
 
 ## Architecture
 
@@ -45,7 +52,7 @@ The `data/config.yaml` resolved path is also where SQLite is created (`data/meta
 1. `config.LoadFile` reads YAML, validates bot token format, resolves env-var interpolation in `chat_id` / secrets / listen address / sqlite path.
 2. `metadata.OpenSQLite` opens the database; configured buckets are `UpsertBucket`'d and any previously-known buckets not in config are `DisableBucketsExcept`'d (they become orphans, not deleted).
 3. `telegram.NewHTTPClient` and `store.NewObjectStore` are constructed. The store owns concurrency semaphores for uploads/downloads/Telegram calls and a `KeyedLocker` for per-key serialization.
-4. `s3api.NewServer` and `dav.NewHandler` are built on top of the same `ObjectStore`. The two handlers are composed by `combinedHandler` (routes `/dav/*` to WebDAV, `/healthz`+`/readyz` to S3, everything else to S3).
+4. `s3api.NewServer` and `dav.NewHandler` are built on top of the same `ObjectStore`. When `web.enabled` is set **and** mode is `all`, `buildWebServer` constructs a `web.Server` over the same store + metadata. The handlers are composed by `combinedHandler`: `/readyz` and `/healthz` → S3; web-owned paths (`web.Server.OwnsPath`) → web; `/dav/*` → WebDAV; anonymous browser GETs (`web.IsBrowserAnonymous`) → web SPA; everything else → S3.
 5. `trustedProxyMiddleware` wraps the combined handler. If the remote IP matches `trusted_proxies` CIDRs **or** the forwarded host matches `trusted_proxy_hosts`, `X-Forwarded-Host` / `X-Forwarded-Proto` (or `Forwarded:` header) rewrite `r.Host` and `r.URL.Scheme` — this is required for SigV4 verification behind a reverse proxy.
 
 ### Storage layout
@@ -60,11 +67,14 @@ The `data/config.yaml` resolved path is also where SQLite is created (`data/meta
 ### Protocol surfaces
 - `internal/s3api/`: SigV4 verification (header + query/presigned), XML responses, listing pagination via opaque `list_token`, multipart endpoints, public-read buckets allow anonymous `GET`/`HEAD` only. The `ObjectStore` interface at the top of `server.go` is what S3 needs from the store — keep it satisfied when adding store methods.
 - `internal/dav/`: built on `golang.org/x/net/webdav`. `fs.go` adapts the metadata store to `webdav.FileSystem`. `MKCOL` writes a zero-byte directory-marker object (key ending in `/`). `COPY`/`MOVE` within the same bucket are metadata-only — they reuse existing chunk rows rather than re-uploading. `LOCK`/`UNLOCK` return not-implemented via `noLockSystem` (use pointer receivers — see `9b76462`).
+- `internal/web/`: optional browser UI + JSON API, only mounted in `all` mode when `web.enabled`. `server.go` owns route registration and the `OwnsPath` / `IsBrowserAnonymous` predicates the combined handler keys off. Auth is a self-signed HMAC-SHA256 JWT (`auth.go`) carried in the `tgnas_session` cookie; admin credentials and the ≥32-byte session secret come from env vars named in config (never inline). `/api/v1/*` endpoints (`api_auth.go`, `api_buckets.go`, `api_files.go`, `api_links.go`) require auth; `GET|HEAD /d/{token}` (`shortlink.go`) serves direct-download links anonymously with Range support and async click counting. `spa.go` serves the embedded SPA with a `dist/` fallback to `index.html`; the `ObjectStore` / `MetadataStore` interfaces at the top of `types.go` are the narrowed contracts the web layer needs — keep them satisfied. The web layer talks to the **store**, so it respects the same chunking/typed-upload rules as S3.
+- `web/`: Vite + React 19 + React Router + HeroUI/Tailwind v4 SPA. Pages under `src/pages/` (Login, Files, Links), API client in `src/api/`. Dev server proxies `/api` and `/d` to `:9000`; production build emits to `internal/web/dist/`.
 
 ### Config quirks worth knowing
 - `chat_id: "${VAR}"` is **full-string interpolation only** — partial like `prefix-${VAR}` is not supported. Empty resolved value fails validation.
 - The WebDAV `prefix` is normalized to have a trailing `/`, cannot be `/`, and cannot collide with the first path segment of any configured bucket name.
 - A bucket present in SQLite but missing from config is an **orphan**: object access is forbidden, but `DELETE /{bucket}` (S3) or `DELETE /dav/{bucket}` (WebDAV) cleans it up.
+- When `web.enabled`, bucket names colliding with reserved web paths (`api`, `d`, `assets`, `login`, `files`, `links`, `favicon.ico`, `manifest.webmanifest`) fail validation. `web.allowed_buckets: []` means "all configured buckets". `direct_link_default_ttl: 0` means links never expire; `upload_auto_link` controls whether a PUT response auto-includes a freshly minted direct link.
 
 ## Testing notes
 

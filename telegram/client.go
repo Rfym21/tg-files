@@ -59,7 +59,9 @@ func (c *HTTPClient) Upload(ctx context.Context, request UploadRequest) (Uploade
 	if err != nil {
 		return UploadedFile{}, err
 	}
-	file.Type = request.Type
+	if file.Type == "" {
+		file.Type = request.Type
+	}
 	file.MessageID = envelope.Result.MessageID
 	return file, nil
 }
@@ -486,42 +488,92 @@ func telegramAPIError(description string) error {
 	return errors.New(description)
 }
 
+const (
+	telegramTypeVoice     = "voice"
+	telegramTypeVideoNote = "video_note"
+)
+
 func uploadedFileFromResult(fileType string, result uploadResult) (UploadedFile, error) {
+	candidates, err := uploadResultCandidateTypes(fileType)
+	if err != nil {
+		return UploadedFile{}, err
+	}
+	for _, candidate := range candidates {
+		if file, ok := uploadedFileByType(candidate, result); ok {
+			return file, nil
+		}
+	}
+	return UploadedFile{}, fmt.Errorf("telegram upload response missing %s", fileType)
+}
+
+func uploadResultCandidateTypes(fileType string) ([]string, error) {
 	switch fileType {
 	case TypePhoto:
-		if len(result.Photo) == 0 {
-			return UploadedFile{}, errors.New("telegram upload response missing photo")
-		}
-		largest := result.Photo[0]
-		for _, photo := range result.Photo[1:] {
-			if photo.FileSize >= largest.FileSize {
-				largest = photo
-			}
-		}
-		return UploadedFile{FileID: largest.FileID, FileUniqueID: largest.FileUniqueID, FileSize: largest.FileSize, MIMEType: largest.MIMEType}, nil
+		return []string{TypePhoto, TypeDocument, TypeAnimation, TypeVideo, TypeAudio, telegramTypeVoice, telegramTypeVideoNote}, nil
 	case TypeVideo:
-		return mediaToUploadedFile("video", result.Video)
+		return []string{TypeVideo, TypeDocument, telegramTypeVideoNote, TypeAnimation, TypeAudio, telegramTypeVoice, TypePhoto}, nil
 	case TypeAudio:
-		return mediaToUploadedFile("audio", result.Audio)
+		return []string{TypeAudio, TypeDocument, telegramTypeVoice, TypeVideo, TypeAnimation, telegramTypeVideoNote, TypePhoto}, nil
 	case TypeAnimation:
-		return mediaToUploadedFile("animation", result.Animation)
+		return []string{TypeAnimation, TypeDocument, TypeVideo, telegramTypeVideoNote, TypePhoto, TypeAudio, telegramTypeVoice}, nil
 	case TypeDocument:
-		return mediaToUploadedFile("document", result.Document)
+		return []string{TypeDocument, TypeVideo, TypeAudio, TypeAnimation, TypePhoto, telegramTypeVoice, telegramTypeVideoNote}, nil
 	default:
-		return UploadedFile{}, fmt.Errorf("unsupported telegram upload type %q", fileType)
+		return nil, fmt.Errorf("unsupported telegram upload type %q", fileType)
 	}
 }
 
-func mediaToUploadedFile(name string, media telegramFile) (UploadedFile, error) {
-	if media.FileID == "" {
-		return UploadedFile{}, fmt.Errorf("telegram upload response missing %s", name)
+func uploadedFileByType(fileType string, result uploadResult) (UploadedFile, bool) {
+	switch fileType {
+	case TypePhoto:
+		return photoToUploadedFile(result.Photo)
+	case TypeVideo:
+		return mediaToUploadedFile(TypeVideo, result.Video)
+	case TypeAudio:
+		return mediaToUploadedFile(TypeAudio, result.Audio)
+	case TypeAnimation:
+		return mediaToUploadedFile(TypeAnimation, result.Animation)
+	case TypeDocument:
+		return mediaToUploadedFile(TypeDocument, result.Document)
+	case telegramTypeVoice:
+		return mediaToUploadedFile(telegramTypeVoice, result.Voice)
+	case telegramTypeVideoNote:
+		return mediaToUploadedFile(telegramTypeVideoNote, result.VideoNote)
+	default:
+		return UploadedFile{}, false
+	}
+}
+
+func photoToUploadedFile(photos []telegramFile) (UploadedFile, bool) {
+	if len(photos) == 0 {
+		return UploadedFile{}, false
+	}
+	largest := photos[0]
+	for _, photo := range photos[1:] {
+		if photo.FileSize >= largest.FileSize {
+			largest = photo
+		}
 	}
 	return UploadedFile{
+		Type:         TypePhoto,
+		FileID:       largest.FileID,
+		FileUniqueID: largest.FileUniqueID,
+		FileSize:     largest.FileSize,
+		MIMEType:     largest.MIMEType,
+	}, true
+}
+
+func mediaToUploadedFile(fileType string, media telegramFile) (UploadedFile, bool) {
+	if media.FileID == "" {
+		return UploadedFile{}, false
+	}
+	return UploadedFile{
+		Type:         fileType,
 		FileID:       media.FileID,
 		FileUniqueID: media.FileUniqueID,
 		FileSize:     media.FileSize,
 		MIMEType:     media.MIMEType,
-	}, nil
+	}, true
 }
 
 type uploadEnvelope struct {
@@ -537,6 +589,8 @@ type uploadResult struct {
 	Audio     telegramFile   `json:"audio"`
 	Animation telegramFile   `json:"animation"`
 	Photo     []telegramFile `json:"photo"`
+	Voice     telegramFile   `json:"voice"`
+	VideoNote telegramFile   `json:"video_note"`
 }
 
 type telegramFile struct {
