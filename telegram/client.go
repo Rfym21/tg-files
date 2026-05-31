@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/textproto"
 	"net/url"
+	"os"
 	"path"
 	"strings"
 	"time"
@@ -92,6 +93,21 @@ func (c *HTTPClient) Download(ctx context.Context, fileID string) (io.ReadCloser
 }
 
 func (c *HTTPClient) downloadFile(ctx context.Context, filePath string) (io.ReadCloser, error) {
+	// Self-hosted Bot API Server (`--local`) returns an absolute filesystem path
+	// in `file_path` instead of a relative URL path. When the host process can
+	// see that path (typically via a shared volume), open it directly to skip
+	// the redundant HTTP round-trip and avoid building a malformed download URL.
+	if isLocalFilesystemPath(filePath) {
+		if f, err := os.Open(filePath); err == nil {
+			return f, nil
+		} else if !os.IsNotExist(err) && !errors.Is(err, os.ErrPermission) {
+			return nil, fmt.Errorf("open local telegram file: %w", err)
+		}
+		// Fall through to HTTP fetch when the local file isn't reachable
+		// (e.g. running without the shared volume). The Bot API Server still
+		// exposes /file/<token>/<absolute-path> so the request below can work.
+	}
+
 	fileURL := c.fileURL(filePath)
 	var lastErr error
 
@@ -403,6 +419,22 @@ func (c *HTTPClient) methodURL(method string) string {
 
 func (c *HTTPClient) fileURL(filePath string) string {
 	return c.apiBaseURL + "/file/bot" + c.botToken + "/" + strings.TrimLeft(path.Clean(filePath), "/")
+}
+
+// isLocalFilesystemPath reports whether file_path looks like an absolute path
+// from a self-hosted Bot API Server (e.g. /var/lib/telegram-bot-api/...).
+func isLocalFilesystemPath(filePath string) bool {
+	if filePath == "" {
+		return false
+	}
+	if strings.HasPrefix(filePath, "/") {
+		return true
+	}
+	// Windows-style drive letter, just in case.
+	if len(filePath) >= 3 && filePath[1] == ':' && (filePath[2] == '/' || filePath[2] == '\\') {
+		return true
+	}
+	return false
 }
 
 func shouldRetryTelegram(statusCode int, data []byte) (bool, time.Duration, error) {

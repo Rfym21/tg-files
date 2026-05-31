@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -583,3 +584,38 @@ func (r blockingReader) Read(p []byte) (int, error) {
 }
 
 type nonSeekableReader struct{ io.Reader }
+
+func TestClientDownloadReadsLocalAbsolutePath(t *testing.T) {
+	dir := t.TempDir()
+	localFile := dir + "/file_1.txt"
+	if err := os.WriteFile(localFile, []byte("local-hello"), 0o644); err != nil {
+		t.Fatalf("write local file: %v", err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/bottoken/getFile":
+			mustDrainBody(t, w, r)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"ok":true,"result":{"file_id":"file-1","file_path":"` + localFile + `","file_size":11}}`))
+		default:
+			t.Errorf("unexpected HTTP request path %q (should not fetch via HTTP when file_path is absolute)", r.URL.Path)
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client := NewHTTPClient("token", server.URL, http.DefaultClient)
+	stream, err := client.Download(context.Background(), "file-1")
+	if err != nil {
+		t.Fatalf("Download returned error: %v", err)
+	}
+	defer stream.Close()
+	data, err := io.ReadAll(stream)
+	if err != nil {
+		t.Fatalf("ReadAll returned error: %v", err)
+	}
+	if string(data) != "local-hello" {
+		t.Fatalf("data = %q, want %q", string(data), "local-hello")
+	}
+}
